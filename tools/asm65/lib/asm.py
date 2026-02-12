@@ -3,11 +3,7 @@ import os
 from .lex import Token, TokenType, Lexer
 from .symtab import SymbolTable
 from .bytes import ByteConverter
-
-def str_compare(a: str, b: str, casei: bool) -> bool:
-  if casei:
-    return a.lower() == b.lower()
-  return a == b
+from .string import str_compare
 
 class AssemblyError(Exception):
   def __init__(self, msg: str, token: Token):
