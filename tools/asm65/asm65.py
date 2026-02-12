@@ -21,7 +21,6 @@ if __name__ == "__main__":
 
     with open(input_file, "r") as f:
       print(f"Assembling {input_file}")
-      asm.reset_lexer()
       asm.assemble_stream(f)
       asm.parse()
 

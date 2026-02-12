@@ -7,8 +7,8 @@ class ByteConverter:
     if size == 1:
       return bytes([value & 0xFF])
     elif size == 2:
-      # big endian
-      return bytes([(value >> 8) & 0xFF, value & 0xFF])
+      # little endian
+      return bytes([value & 0xFF, (value >> 8) & 0xFF])
     else:
       raise ValueError(f"Invalid size: {size}")
 
