@@ -32,8 +32,9 @@ class Token:
     return self.__str__()
 
 class Tokenizer:
-    def __init__(self, stream):
+    def __init__(self, stream, filename: str = None):
         self.text = stream.read()
+        self.filename = filename
         self.pos = 0
         self.line = 1
         self.len = len(self.text)

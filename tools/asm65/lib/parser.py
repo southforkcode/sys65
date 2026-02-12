@@ -1,4 +1,5 @@
 from typing import List, Optional, Tuple, Union
+import os
 from .tokenizer import Tokenizer, Token, TokenType
 from .ast import Program, Statement, Instruction, Directive, Label, Assignment, Unresolved
 from .string import str_compare
@@ -17,19 +18,29 @@ class ParserError(Exception):
 class Parser:
     def __init__(self, tokenizer: Tokenizer):
         self.lex = tokenizer
+        self.tokenizers: List[Tokenizer] = []
         self.peeked: List[Token] = []
+
+    def _read_next_token(self) -> Token:
+        tok = self.lex.next_token()
+        while tok.type == TokenType.EOF and self.tokenizers:
+             # Close current stream?
+             # For now just drop reference
+             self.lex = self.tokenizers.pop()
+             tok = self.lex.next_token()
+        return tok
 
     def peektok(self) -> Token:
         if len(self.peeked) > 0:
             return self.peeked[0]      
-        tok = self.lex.next_token()
+        tok = self._read_next_token()
         self.peeked.append(tok)
         return tok
 
     def nexttok(self) -> Token:
         if len(self.peeked) > 0:
             return self.peeked.pop(0)
-        return self.lex.next_token()
+        return self._read_next_token()
 
     def expect(self, type: TokenType, lexeme: str = None, casei: bool = False) -> Optional[Token]:
         tok = self.peektok()
@@ -89,10 +100,45 @@ class Parser:
             tok = self.peektok()
             raise ParserError(f"Unknown token: {tok.lexeme if tok else 'EOF'}", tok)
 
-    def parse_directive(self, tok: Token) -> Directive:
+    def parse_directive(self, tok: Token) -> Optional[Directive]:
         name = tok.lexeme
         args = []
         
+        # Handle include
+        if name in ['.include', '.inc']:
+             arg = self.require(TokenType.STR, None)
+             filename = arg.value
+             self.require(TokenType.EOL)
+             
+             # Resolve path
+             base_dir = os.getcwd()
+             if self.lex.filename:
+                 base_dir = os.path.dirname(os.path.abspath(self.lex.filename))
+             path = os.path.join(base_dir, filename)
+             
+             if not os.path.exists(path):
+                 raise ParserError(f"Include file not found: {path} (base: {base_dir}, file: {filename})", tok)
+
+             # Check recursion/cycles
+             abs_path = os.path.abspath(path)
+             for t in self.tokenizers:
+                 if t.filename and os.path.abspath(t.filename) == abs_path:
+                     raise ParserError(f"Recursive include detected: {path}", tok)
+             # Also check current lexer
+             if self.lex.filename and os.path.abspath(self.lex.filename) == abs_path:
+                  raise ParserError(f"Recursive include detected: {path}", tok)
+             
+             try:
+                 with open(path, 'r') as f:
+                     new_lex = Tokenizer(f, path)
+             except Exception as e:
+                 raise ParserError(f"Failed to open include file {path}: {e}", tok)
+                 
+             self.tokenizers.append(self.lex)
+             self.lex = new_lex
+             
+             return None
+
         # Parse args based on directive type or just generally?
         # Assembler logic was specific per directive.
         # Here we can just parse expression list?
