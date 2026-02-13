@@ -1,6 +1,6 @@
 from typing import List, Dict, Union
-from .ast import Program, Statement, Instruction, Directive, Label, Assignment, Unresolved
-from .opcodes import OPCODES
+from .ast import Program, Statement, Instruction, Directive, Label, Assignment, Unresolved, BinaryExpr
+from .opcodes import OPCODES, OPCODES_6502, OPCODES_65C02
 from .bytes import ByteConverter
 from .symtab import SymbolTable
 
@@ -18,6 +18,8 @@ class Compiler:
         self.origin = 0
         self.pc = 0 # Program Counter
         self.pass_num = 1
+        self.cpu_mode = "6502"
+        self.opcodes = OPCODES_6502
 
     def compile(self, program: Program) -> bytearray:
         # Pass 1: Calculate addresses and define labels
@@ -25,6 +27,8 @@ class Compiler:
         self.pc = 0
         self.origin = 0 # reset
         self.start_origin = None # Track first .org
+        self.cpu_mode = "6502"
+        self.opcodes = OPCODES_6502
         self.visit_program(program)
         
         # Pass 2: Generate code
@@ -32,6 +36,8 @@ class Compiler:
         self.pc = 0
         self.origin = 0 # reset (though mostly unused in pass 2 logic except if referenced)
         # origin should ideally be preserved from pass 1 for reporting 
+        self.cpu_mode = "6502"
+        self.opcodes = OPCODES_6502
         self.visit_program(program)
         
         return self.bytes
@@ -91,6 +97,30 @@ class Compiler:
                  val = self.resolve_expr(d.args[1]) or 0
              for _ in range(count):
                  self.emit_byte(val)
+        elif d.name == '.cpu':
+             # Handle .cpu directive
+             val = d.args[0]
+             # val might be string or identifier (if unquoted)
+             # Parser wraps strings in str?
+             # If it's a string literal, it comes as string.
+             # If it's ID, it comes as Unresolved?
+             # Let's check parser. Parser returns Unresolved for IDs in expr.
+             mode_str = ""
+             if isinstance(val, str):
+                 mode_str = val
+             elif isinstance(val, Unresolved):
+                 mode_str = val.name
+             
+             mode_str = mode_str.lower().strip('"\'')
+             
+             if mode_str == "6502":
+                 self.cpu_mode = "6502"
+                 self.opcodes = OPCODES_6502
+             elif mode_str == "65c02":
+                 self.cpu_mode = "65c02"
+                 self.opcodes = OPCODES_65C02
+             else:
+                 raise CompilerError(f"Unknown CPU mode: {mode_str}", d)
 
     def visit_instruction(self, inst: Instruction):
         opcode = 0
@@ -101,8 +131,8 @@ class Compiler:
 
         # Pre-check: parser might label branch targets as ABS.
         # If opcode only supports REL, switch mode.
-        if inst.mnemonic in OPCODES:
-            supported = OPCODES[inst.mnemonic]
+        if inst.mnemonic in self.opcodes:
+            supported = self.opcodes[inst.mnemonic]
             if mode == 'ABS' and 'REL' in supported and 'ABS' not in supported:
                 mode = 'REL'
 
@@ -130,11 +160,11 @@ class Compiler:
             # Only optimize if the instruction SUPPORTS ZP!
             # e.g. JMP supports ABS but not ZP.
             supports_zp = False
-            if inst.mnemonic in OPCODES:
+            if inst.mnemonic in self.opcodes:
                  # Check if equivalent ZP mode exists
                  # ABS->ZP, ABSX->ZPX, ABSY->ZPY
                  zp_mode = mode.replace('ABS', 'ZP')
-                 if zp_mode in OPCODES[inst.mnemonic]:
+                 if zp_mode in self.opcodes[inst.mnemonic]:
                      supports_zp = True
             
             val = self.resolve_expr(operand)
@@ -150,8 +180,24 @@ class Compiler:
                  operand_val = val or 0
         elif mode in ['IND', 'INDX', 'INDY']:
              # IND (JMP) is 3 bytes. INDX/INDY are ZP indirects (2 bytes).
-             if mode == 'IND': size = 3
-             else: size = 2
+             # 65C02 adds:
+             # ADC (zp) -> IND (2 bytes)
+             # JMP (abs,x) -> INDX (3 bytes)
+             
+             if mode == 'IND':
+                 if inst.mnemonic == 'JMP':
+                     size = 3
+                 else:
+                     # 65C02 'ADC (zp)' etc.
+                     size = 2
+             elif mode == 'INDX':
+                 if inst.mnemonic == 'JMP':
+                     # 65C02 JMP (abs,x)
+                     size = 3
+                 else:
+                     size = 2
+             else: # INDY
+                 size = 2
              operand_val = self.resolve_expr(operand) or 0
         
         # Emit
@@ -159,10 +205,10 @@ class Compiler:
             self.pc += size
         else:
             # Look up opcode
-            if inst.mnemonic not in OPCODES:
+            if inst.mnemonic not in self.opcodes:
                  raise CompilerError(f"Unknown instruction {inst.mnemonic}", inst)
             
-            modes = OPCODES[inst.mnemonic]
+            modes = self.opcodes[inst.mnemonic]
             if mode not in modes:
                  # Should have been handled above or is invalid
                  raise CompilerError(f"Mode {mode} not supported for {inst.mnemonic}", inst)
@@ -192,6 +238,12 @@ class Compiler:
             if expr.type == 'LOW': return val & 0xFF
             if expr.type == 'HIGH': return (val >> 8) & 0xFF
             return val
+        if isinstance(expr, BinaryExpr):
+            lhs = self.resolve_expr(expr.left)
+            rhs = self.resolve_expr(expr.right)
+            if lhs is None or rhs is None: return None
+            if expr.op == '+': return lhs + rhs
+            if expr.op == '-': return lhs - rhs
         return None
 
     def emit_byte(self, val):

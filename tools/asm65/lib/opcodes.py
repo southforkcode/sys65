@@ -2,7 +2,7 @@
 # 6502 Opcodes
 # Structure: { Mnemonic: { AddressingMode: Opcode } }
 
-OPCODES = {
+OPCODES_6502 = {
     # Load/Store
     'LDA': { '#': 0xA9, 'ZP': 0xA5, 'ZPX': 0xB5, 'ABS': 0xAD, 'ABSX': 0xBD, 'ABSY': 0xB9, 'INDX': 0xA1, 'INDY': 0xB1 },
     'LDX': { '#': 0xA2, 'ZP': 0xA6, 'ZPY': 0xB6, 'ABS': 0xAE, 'ABSY': 0xBE },
@@ -80,3 +80,43 @@ OPCODES = {
     'TSX': { 'IMP': 0xBA },
     'TXS': { 'IMP': 0x9A },
 }
+
+OPCODES = OPCODES_6502
+
+import copy
+OPCODES_65C02 = copy.deepcopy(OPCODES_6502)
+
+# Add 65C02 specific opcodes
+# BRA
+OPCODES_65C02['BRA'] = { 'REL': 0x80 }
+# Push/Pop index
+OPCODES_65C02['PHX'] = { 'IMP': 0xDA }
+OPCODES_65C02['PLX'] = { 'IMP': 0xFA }
+OPCODES_65C02['PHY'] = { 'IMP': 0x5A }
+OPCODES_65C02['PLY'] = { 'IMP': 0x7A }
+# STZ
+OPCODES_65C02['STZ'] = { 'ZP': 0x64, 'ZPX': 0x74, 'ABS': 0x9C, 'ABSX': 0x9E }
+# TRB/TSB
+OPCODES_65C02['TRB'] = { 'ZP': 0x14, 'ABS': 0x1C }
+OPCODES_65C02['TSB'] = { 'ZP': 0x04, 'ABS': 0x0C }
+# BIT (immediate, ZPX, ABSX)
+OPCODES_65C02['BIT']['#'] = 0x89
+OPCODES_65C02['BIT']['ZPX'] = 0x34
+OPCODES_65C02['BIT']['ABSX'] = 0x3C
+# INC/DEC Accumulator
+OPCODES_65C02['INC']['ACC'] = 0x1A
+OPCODES_65C02['DEC']['ACC'] = 0x3A
+
+# Indirect (zp) support for ADC, AND, CMP, EOR, LDA, ORA, SBC, STA
+OPCODES_65C02['ADC']['IND'] = 0x72
+OPCODES_65C02['AND']['IND'] = 0x32
+OPCODES_65C02['CMP']['IND'] = 0xD2
+OPCODES_65C02['EOR']['IND'] = 0x52
+OPCODES_65C02['LDA']['IND'] = 0xB2
+OPCODES_65C02['ORA']['IND'] = 0x12
+OPCODES_65C02['SBC']['IND'] = 0xF2
+OPCODES_65C02['STA']['IND'] = 0x92
+
+# JMP (abs,X)
+# We will use 'INDX' mode logic but force 2-byte operand in compiler
+OPCODES_65C02['JMP']['INDX'] = 0x7C

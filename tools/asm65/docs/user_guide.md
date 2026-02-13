@@ -7,11 +7,14 @@
 To assemble a source file, run the `asm65.py` script from the command line:
 
 ```bash
-python3 tools/asm65/asm65.py <input_file> [<input_file>...] <output_file>
+python3 tools/asm65/asm65.py [-f {bin,hex}] <input_file> [<input_file>...] <output_file>
 ```
 
-- `<input_file>`: One or more assembly source files (`.asm`). If multiple files are provided, they are processed in order.
-- `<output_file>`: The destination path for the compiled binary file (`.bin` or `.prg`).
+- `<input_file>`: One or more assembly source files (`.asm`).
+- `<output_file>`: The destination path.
+- `-f, --format`: Output format.
+    - `bin` (default): Raw binary file.
+    - `hex`: Text file with hex dump (`ADDRESS: B1 B2 ...`).
 
 ### Example
 

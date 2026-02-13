@@ -1,7 +1,7 @@
 from typing import List, Optional, Tuple, Union
 import os
 from .tokenizer import Tokenizer, Token, TokenType
-from .ast import Program, Statement, Instruction, Directive, Label, Assignment, Unresolved
+from .ast import Program, Statement, Instruction, Directive, Label, Assignment, Unresolved, BinaryExpr
 from .string import str_compare
 
 class ParserError(Exception):
@@ -146,6 +146,8 @@ class Parser:
              args = self.parse_expr_list()
         elif name == '.org':
              args = [self.parse_expr()]
+        elif name == '.cpu':
+             args = [self.parse_expr()]
         
         self.require(TokenType.EOL)
         return Directive(name, args)
@@ -255,7 +257,27 @@ class Parser:
         
         return ('ABS', [expr])
 
-    def parse_expr(self, required_type: type = None) -> Union[int, str, Unresolved]:
+    def parse_expr(self, required_type: type = None) -> Union[int, str, Unresolved, BinaryExpr]:
+        val = self.parse_term(required_type)
+        
+        while True:
+            if self.expect(TokenType.OP, '+'):
+                rhs = self.parse_term(required_type)
+                if isinstance(val, int) and isinstance(rhs, int):
+                    val += rhs
+                else:
+                     val = BinaryExpr(val, '+', rhs)
+            elif self.expect(TokenType.OP, '-'):
+                rhs = self.parse_term(required_type)
+                if isinstance(val, int) and isinstance(rhs, int):
+                    val -= rhs
+                else:
+                     val = BinaryExpr(val, '-', rhs)
+            else:
+                break
+        return val
+
+    def parse_term(self, required_type: type = None) -> Union[int, str, Unresolved]:
         if tok := self.expect(TokenType.OP, "<"):
             expr = self.parse_expr(required_type=int)
             if isinstance(expr, int): return expr & 0xFF

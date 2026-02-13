@@ -66,8 +66,8 @@ class Assembler:
   def symbols(self) -> SymbolTable:
     return self.compiler.symbols
 
-  def assemble_stream(self, stream):
-    self.lex = Tokenizer(stream)
+  def assemble_stream(self, stream, filename: str = None):
+    self.lex = Tokenizer(stream, filename)
 
   def parse(self):
     from .parser import Parser

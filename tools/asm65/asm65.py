@@ -1,30 +1,47 @@
 import sys
 import os
+import argparse
 
 from lib.asm import Assembler
 
-if __name__ == "__main__":
-  # parse command line: 1 or more input files, 1 output file
-  args = sys.argv[1:]
-  if len(args) < 2:
-    print("Usage: asm65 <input>+ <output>")
-    sys.exit(1)
+def write_hex_output(asm, output_file):
+    with open(output_file, "w") as f:
+        # Iterate bytes and print
+        # Assumption: asm.bytes corresponds to [asm.origin ... asm.origin + len]
+        # We print 16 bytes per line
+        start_addr = asm.origin
+        data = asm.bytes
+        
+        for i in range(0, len(data), 16):
+            chunk = data[i:i+16]
+            # Format: 'ADDRESS: B1 B2 ...'
+            # Address is 16-bit hex
+            # Bytes are 2-char hex
+            addr = start_addr + i
+            hex_bytes = " ".join(f"{b:02X}" for b in chunk)
+            f.write(f"{addr:04X}: {hex_bytes}\n")
 
-  input_files = args[:-1]
-  output_file = args[-1]
+if __name__ == "__main__":
+  parser = argparse.ArgumentParser(description="asm65 - 6502 Assembler")
+  parser.add_argument("input_files", nargs="+", help="Input assembly files")
+  parser.add_argument("output_file", help="Output binary file")
+  parser.add_argument("-f", "--format", choices=["bin", "hex"], default="bin", help="Output format (bin is default)")
+  
+  args = parser.parse_args()
 
   asm = Assembler()
-  for input_file in input_files:
+  for input_file in args.input_files:
     if not os.path.exists(input_file):
       print(f"Error: {input_file} does not exist")
       sys.exit(1)
 
     with open(input_file, "r") as f:
       print(f"Assembling {input_file}")
-      asm.assemble_stream(f)
+      asm.assemble_stream(f, input_file)
       asm.parse()
 
-  # dump symbol table to stdout
+  # dump symbol table to stdout (optional, maybe suppress?)
+  # Keeping it as is helpful for debugging
   for name, value in asm.symbols.items():
     print(f"{name}: {value}")
 
@@ -35,4 +52,13 @@ if __name__ == "__main__":
     print(f"{b:02x}", end="")
     if i % 16 == 15: print()
   print()
+
+  # Write output
+  if args.format == "bin":
+      with open(args.output_file, "wb") as f:
+          f.write(bytearray(asm.bytes))
+      print(f"Written {len(asm.bytes)} bytes to {args.output_file} (binary)")
+  elif args.format == "hex":
+      write_hex_output(asm, args.output_file)
+      print(f"Written {len(asm.bytes)} bytes to {args.output_file} (hex)")
 

@@ -40,3 +40,9 @@ class Instruction(Statement):
     mnemonic: str
     mode: str
     operand: Union[int, str, Unresolved, None]
+
+@dataclass
+class BinaryExpr(Node):
+    left: Union[int, str, Unresolved, 'BinaryExpr']
+    op: str
+    right: Union[int, str, Unresolved, 'BinaryExpr']
