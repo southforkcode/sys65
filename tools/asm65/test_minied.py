@@ -102,7 +102,36 @@ def generate_test_script(hex_lines):
             type text "." & return
             delay 0.5
 
-            -- 6. Print final
+            -- 7. Reset Buffer (Actually, just append new lines for delete test)
+            -- We'll just continue adding lines to existing buffer
+            type text "A" & return
+            delay 0.5
+            type text "Line 3 (New)" & return
+            delay 0.2
+            type text "Line 4" & return
+            delay 0.2
+            type text "Line 5" & return
+            delay 0.2
+            type text "." & return
+            delay 0.5
+
+            -- 8. Print before delete
+            type text "P" & return
+            delay 1.0
+
+            -- 9. Delete Line 3 (Middle)
+            type text "D 3" & return
+            delay 1.0
+
+            -- 10. Print after delete (Should see lines shift up)
+            type text "P" & return
+            delay 1.0
+
+            -- 11. Delete Last Line (Should be Line 4 now, originally line 5)
+            type text "D 4" & return
+            delay 1.0
+
+            -- 12. Final Print
             type text "P" & return
             delay 1.0
             

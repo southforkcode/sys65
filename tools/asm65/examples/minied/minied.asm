@@ -95,9 +95,9 @@ cmd_table_end:
 cmd_impl:
     .word 0
 cmd_table:
-    .byte 'A'+$80, 'P'+$80, 'Q'+$80, 'H'+$80, 'E'+$80, 0
+    .byte 'A'+$80, 'P'+$80, 'Q'+$80, 'H'+$80, 'E'+$80, 'D'+$80, 0
 cmd_impl_table:
-    .word do_append, do_print, do_quit, do_home, do_edit, 0
+    .word do_append, do_print, do_quit, do_home, do_edit, do_delete, 0
 
 do_quit:
     rts
@@ -456,6 +456,110 @@ _de_done_copy:
     jmp command_loop
 
 _de_cancel:
+    jmp command_loop
+
+do_delete:
+    ; 1. Parse argument
+    iny
+_dd_skip_space:
+    lda (PTR_L), y
+    beq _dd_no_arg
+    cmp #' '+$80
+    bne _dd_check_arg
+    iny
+    bne _dd_skip_space
+
+_dd_check_arg:
+    cmp #'0'+$80
+    bcc _dd_no_arg
+    cmp #'9'+$80+1
+    bcs _dd_no_arg
+    
+    jsr PARSE_DECIMAL
+    sta TARGET_LINE
+    
+    ; Check if valid (1 <= TARGET <= LINE_IDX)
+    lda TARGET_LINE
+    beq _dd_invalid
+    cmp LINE_IDX
+    beq _dd_valid_chk
+    bcs _dd_invalid ; TARGET > LINE_IDX
+
+_dd_valid_chk:
+    ; 2. Find line address (store in SHIFT_DEST)
+    lda #<BUFFER_START
+    sta SHIFT_DEST_L
+    lda #>BUFFER_START
+    sta SHIFT_DEST_H
+    
+    ldx TARGET_LINE
+    dex
+    beq _dd_found_line
+    
+_dd_find_loop:
+    ldy #0
+_dd_scan_line:
+    lda (SHIFT_DEST_L), y
+    beq _dd_next_line
+    iny
+    bne _dd_scan_line
+_dd_next_line:
+    tya
+    clc
+    adc #1
+    adc SHIFT_DEST_L
+    sta SHIFT_DEST_L
+    lda SHIFT_DEST_H
+    adc #0
+    sta SHIFT_DEST_H
+    dex
+    bne _dd_find_loop
+
+_dd_found_line:
+    ; SHIFT_DEST points to start of line to delete.
+    ; We need to find the start of the next line (SHIFT_SRC).
+    
+    ; Find end of current line
+    ldy #0
+_dd_find_end:
+    lda (SHIFT_DEST_L), y
+    beq _dd_found_end
+    iny
+    bne _dd_find_end
+    
+_dd_found_end:
+    ; SHIFT_SRC = SHIFT_DEST + Y + 1
+    tya
+    clc
+    adc #1
+    adc SHIFT_DEST_L
+    sta SHIFT_SRC_L
+    lda SHIFT_DEST_H
+    adc #0
+    sta SHIFT_SRC_H
+    
+    ; Check if we are deleting the last line
+    lda TARGET_LINE
+    cmp LINE_IDX
+    beq _dd_last_line
+    
+    ; Not last line, shift everything down
+    jsr shift_down
+    dec LINE_IDX
+    jmp command_loop
+
+_dd_last_line:
+    ; Just update TEXT_PTR to SHIFT_DEST
+    lda SHIFT_DEST_L
+    sta TEXT_PTR_L
+    lda SHIFT_DEST_H
+    sta TEXT_PTR_H
+    dec LINE_IDX
+    jmp command_loop
+
+_dd_invalid:
+_dd_no_arg:
+    jsr PRERR
     jmp command_loop
 
 _de_invalid:
