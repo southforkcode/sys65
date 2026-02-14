@@ -119,6 +119,23 @@ Syntax: `.fill <count>, <value>`
 .fill 256, $EA ; Fill 256 bytes with NOPs
 ```
 
+### .cpu
+Sets the target CPU mode. Supported values are "6502" (default) and "65c02".
+When in "65c02" mode, additional instructions (like `bra`, `phx`, `phy`, etc.) are available.
+
+```asm
+.cpu "65c02"
+```
+
+### .align
+Aligns the current program counter to the next multiple of the specified value.
+This is useful for aligning data or code to page boundaries or other specific alignments.
+It fills the gap with zeros.
+
+```asm
+.align 256 ; Align to next page boundary
+```
+
 ### .include / .inc
 Includes another source file at the current position. The path is relative to the current file.
 
