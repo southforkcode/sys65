@@ -24,22 +24,26 @@ class Program(Node):
 @dataclass
 class Label(Statement):
     name: str
+    line: int = 0
 
 @dataclass
 class Assignment(Statement):
     name: str
     value: int
+    line: int = 0
 
 @dataclass
 class Directive(Statement):
     name: str
     args: List[Union[int, str, Unresolved]]
+    line: int = 0
 
 @dataclass
 class Instruction(Statement):
     mnemonic: str
     mode: str
     operand: Union[int, str, Unresolved, None]
+    line: int = 0
 
 @dataclass
 class BinaryExpr(Node):

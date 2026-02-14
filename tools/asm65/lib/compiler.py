@@ -185,7 +185,8 @@ class Compiler:
                 # offset = target - (pc + 2)
                 offset = target - (self.pc + 2)
                 if offset < -128 or offset > 127:
-                    raise CompilerError(f"Branch out of range: {offset}", inst)
+                    line_info = f" at line {inst.line}" if hasattr(inst, 'line') and inst.line else ""
+                    raise CompilerError(f"Branch out of range: {offset}{line_info}", inst)
                 operand_val = offset
         elif mode in ['ABS', 'ABSX', 'ABSY']:
             # Check ZP optimization

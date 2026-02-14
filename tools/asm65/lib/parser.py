@@ -86,26 +86,21 @@ class Parser:
         # directive?
         elif tok := self.expect(TokenType.DIR):
             return self.parse_directive(tok)
-        # label or assignment or instruction (if mnemonic looks like ID)
+        # label or assignment or instruction
         elif tok := self.expect(TokenType.ID):
             if self.expect(TokenType.OP, ':'):
-                return Label(tok.lexeme)
+                return Label(tok.lexeme, line=tok.line)
             elif self.expect(TokenType.OP, '='):
                 value = self.parse_expr(required_type=int)
                 self.require(TokenType.EOL)
-                return Assignment(tok.lexeme, value)
+                return Assignment(tok.lexeme, value, line=tok.line)
             else:
                 return self.parse_instruction(tok)
-        # Local numeric label definion e.g. "1:"
+        # Local numeric label
         elif tok := self.expect(TokenType.NUM):
              if self.expect(TokenType.OP, ':'):
-                 # Convert numeric value to string for label name
-                 # Or just use lexeme? Lexeme for NUM 1 is "1".
-                 return Label(tok.lexeme)
+                 return Label(tok.lexeme, line=tok.line)
              else:
-                 # Start with number but not label?
-                 # Could be instruction? No instruction starts with number.
-                 # Could be error?
                  raise ParserError(f"Unexpected number at start of statement: {tok.lexeme}", tok)
         else:
             tok = self.peektok()
@@ -115,27 +110,29 @@ class Parser:
         name = tok.lexeme
         args = []
         
-        # Handle include
+        # Handle include (Same as before)
         if name in ['.include', '.inc']:
              arg = self.require(TokenType.STR, None)
+             # ... (existing include logic) ...
+             # For brevity, I'm just copying the structure changes.
+             # In real edit I need full body or careful splice.
+
+             # RE-Use existing include logic block
              filename = arg.value
              self.require(TokenType.EOL)
              
-             # Resolve path
              base_dir = os.getcwd()
              if self.lex.filename:
                  base_dir = os.path.dirname(os.path.abspath(self.lex.filename))
              path = os.path.join(base_dir, filename)
              
              if not os.path.exists(path):
-                 raise ParserError(f"Include file not found: {path} (base: {base_dir}, file: {filename})", tok)
+                 raise ParserError(f"Include file not found: {path}", tok)
 
-             # Check recursion/cycles
              abs_path = os.path.abspath(path)
              for t in self.tokenizers:
                  if t.filename and os.path.abspath(t.filename) == abs_path:
                      raise ParserError(f"Recursive include detected: {path}", tok)
-             # Also check current lexer
              if self.lex.filename and os.path.abspath(self.lex.filename) == abs_path:
                   raise ParserError(f"Recursive include detected: {path}", tok)
              
@@ -150,16 +147,13 @@ class Parser:
              
              return None
 
-        # Parse args based on directive type or just generally?
-        # Assembler logic was specific per directive.
-        # Here we can just parse expression list?
         if name in ['.byte', '.word', '.fill']:
              args = self.parse_expr_list()
         elif name in ['.org', '.cpu', '.align']:
              args = [self.parse_expr()]
         
         self.require(TokenType.EOL)
-        return Directive(name, args)
+        return Directive(name, args, line=tok.line)
 
     def parse_instruction(self, tok: Token) -> Instruction:
         mnemonic = tok.lexeme.upper()
@@ -167,7 +161,7 @@ class Parser:
         self.require(TokenType.EOL)
         
         operand = operands[0] if operands else None
-        return Instruction(mnemonic, mode, operand)
+        return Instruction(mnemonic, mode, operand, line=tok.line)
 
     def parse_operands(self, instruction: str) -> Tuple[str, List]:
         operands = []

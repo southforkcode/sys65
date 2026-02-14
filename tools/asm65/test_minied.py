@@ -131,7 +131,17 @@ def generate_test_script(hex_lines):
             type text "D 4" & return
             delay 1.0
 
-            -- 12. Final Print
+            -- 13. Insert at Line 3
+            type text "I 3" & return
+            delay 1.0
+            type text "Line 3 Inserted A" & return
+            delay 0.5
+            type text "Line 3 Inserted B" & return
+            delay 0.5
+            type text "." & return
+            delay 0.5
+            
+            -- 14. Final Print after Insert
             type text "P" & return
             delay 1.0
             

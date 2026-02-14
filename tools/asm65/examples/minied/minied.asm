@@ -95,9 +95,9 @@ cmd_table_end:
 cmd_impl:
     .word 0
 cmd_table:
-    .byte 'A'+$80, 'P'+$80, 'Q'+$80, 'H'+$80, 'E'+$80, 'D'+$80, 0
+    .byte 'A'+$80, 'P'+$80, 'Q'+$80, 'H'+$80, 'E'+$80, 'D'+$80, 'I'+$80, 0
 cmd_impl_table:
-    .word do_append, do_print, do_quit, do_home, do_edit, do_delete, 0
+    .word do_append, do_print, do_quit, do_home, do_edit, do_delete, do_insert, 0
 
 do_quit:
     rts
@@ -559,6 +559,195 @@ _dd_last_line:
 
 _dd_invalid:
 _dd_no_arg:
+    jsr PRERR
+    jmp command_loop
+
+do_insert:
+    ; 1. Parsing similar to others
+    iny
+_di_skip_space:
+    lda (PTR_L), y
+    bne _di_check_arg_trampoline
+    jmp _di_no_arg
+
+_di_check_arg_trampoline:
+    cmp #' '+$80
+    bne _di_check_arg
+    iny
+    bne _di_skip_space
+    
+_di_check_arg:
+    cmp #'0'+$80
+    bcc _di_no_arg_trampoline
+    cmp #'9'+$80+1
+    bcs _di_no_arg_trampoline
+    
+    jsr PARSE_DECIMAL
+    sta TARGET_LINE
+    jmp _di_check_range
+
+_di_no_arg_trampoline:
+    jmp _di_no_arg
+
+_di_check_range:
+    
+    ; Check range
+    lda TARGET_LINE
+    bne _di_check_range_valid
+    jmp _di_invalid
+
+_di_check_range_valid:
+    cmp LINE_IDX
+    beq _di_find_start
+    bcs _di_invalid_jmp ; > LINE_IDX
+    jmp _di_find_start_entry
+
+_di_invalid_jmp:
+    jmp _di_invalid
+
+_di_find_start:
+_di_find_start_entry:
+    ; 2. Find Address of desired line
+    lda #<BUFFER_START
+    sta EDIT_PTR_L ; Using EDIT_PTR to hold insertion point
+    lda #>BUFFER_START
+    sta EDIT_PTR_H
+    
+    ldx TARGET_LINE
+    dex
+    bne _di_start_loop
+    jmp _di_input_loop
+
+_di_start_loop:
+    jmp _di_find_loop_entry
+
+_di_find_loop_entry: ; Used as label
+_di_find_loop:
+    ldy #0
+_di_scan:
+    lda (EDIT_PTR_L), y
+    beq _di_next
+    iny
+    bne _di_scan
+_di_next:
+    tya
+    clc
+    adc #1
+    adc EDIT_PTR_L
+    sta EDIT_PTR_L
+    lda EDIT_PTR_H
+    adc #0
+    sta EDIT_PTR_H
+    dex
+    bne _di_find_loop_trampoline_2
+    jmp _di_input_loop
+
+_di_find_loop_trampoline_2:
+    jmp _di_find_loop_entry
+    
+_di_input_loop:
+    ; Prompt
+    lda #':'+$80
+    sta PROMPT_CHAR
+    
+    lda #<CMD_BUFFER
+    sta PTR_L
+    lda #>CMD_BUFFER
+    sta PTR_H
+    
+    jsr get_line_monitor
+    
+    ; Check for cancel "."
+    ldy #0
+    lda (PTR_L), y
+    cmp #'.'+$80
+    bne _di_do_insert
+    iny
+    lda (PTR_L), y
+    bne _di_do_insert
+    jmp command_loop ; Cancelled
+    
+_di_do_insert:
+    ; Calc length of new string
+    ldy #0
+_di_len:
+    lda (PTR_L), y
+    beq _di_got_len
+    iny
+    bne _di_len
+_di_got_len:
+    ; Y = length. Need Y+1 bytes (null terminator)
+    sty NEW_LEN_VAR
+    
+    ; Setup shift_up
+    ; SHIFT_SRC = EDIT_PTR (Start of block to move)
+    lda EDIT_PTR_L
+    sta SHIFT_SRC_L
+    lda EDIT_PTR_H
+    sta SHIFT_SRC_H
+    
+    ; SHIFT_DEST = EDIT_PTR + NEW_LEN + 1
+    tya
+    clc
+    adc #1
+    adc EDIT_PTR_L
+    sta SHIFT_DEST_L
+    lda EDIT_PTR_H
+    adc #0
+    sta SHIFT_DEST_H
+    
+    jsr shift_up ; Moves rest of buffer up. Updates TEXT_PTR.
+    
+    ; Copy CMD_BUFFER to memory at EDIT_PTR
+    ldy #0
+_di_copy:
+    lda CMD_BUFFER, y
+    sta (EDIT_PTR_L), y
+    beq _di_done_copy
+    iny
+    bne _di_copy
+    
+_di_done_copy:
+    ; Update EDIT_PTR to point to start of next line (which is SHIFT_DEST from before)
+    ; Since shift_up destroys SHIFT_DEST, recompute:
+    lda NEW_LEN_VAR
+    clc
+    adc #1
+    adc EDIT_PTR_L
+    sta EDIT_PTR_L
+    lda EDIT_PTR_H
+    adc #0
+    sta EDIT_PTR_H
+    
+    jmp _di_reloop
+
+_di_copy:
+    lda CMD_BUFFER, y
+    sta (EDIT_PTR_L), y
+    beq _di_done_copy
+    iny
+    bne _di_copy
+    
+_di_done_copy:
+    ; Update EDIT_PTR to point to start of next line (which is SHIFT_DEST from before)
+    ; Since shift_up destroys SHIFT_DEST, recompute:
+    lda NEW_LEN_VAR
+    clc
+    adc #1
+    adc EDIT_PTR_L
+    sta EDIT_PTR_L
+    lda EDIT_PTR_H
+    adc #0
+    sta EDIT_PTR_H
+    
+    inc LINE_IDX
+    jmp _di_input_loop
+
+_di_reloop:
+    jmp command_loop
+
+_di_invalid:
+_di_no_arg:
     jsr PRERR
     jmp command_loop
 
