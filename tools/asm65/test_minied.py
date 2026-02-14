@@ -72,11 +72,41 @@ def generate_test_script(hex_lines):
             type text "2000G" & return
             delay 1.0
             
-            -- Test Case 1: Type 'A' and see what happens
-            type text "A"
+            -- 1. Add some lines
+            type text "A" & return
+            delay 0.5
+            type text "Line 1 Original" & return
+            delay 0.2
+            type text "Line 2 To Keep" & return
+            delay 0.2
+            type text "." & return
+            delay 0.5
+            
+            -- 2. Print initial
+            type text "P" & return
             delay 1.0
             
-            return "Test sequence completed. Please check the Virtual ][ window."
+            -- 3. Edit Line 1 (Replace)
+            type text "E 1" & return
+            delay 1.0
+            type text "Line 1 Edited" & return
+            delay 0.5
+            
+            -- 4. Print again
+            type text "P" & return
+            delay 1.0
+
+            -- 5. Edit Line 2 (Cancel)
+            type text "E 2" & return
+            delay 1.0
+            type text "." & return
+            delay 0.5
+
+            -- 6. Print final
+            type text "P" & return
+            delay 1.0
+            
+            return "Test sequence completed."
         end tell
     end tell
     '''
