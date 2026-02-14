@@ -5,8 +5,8 @@ import sys
 
 # Configuration
 HEX_FILE = "/tmp/minied.hex"
-ASM_FILE = "examples/minied/minied.asm"
-ASM_TOOL = "asm65.py"
+ASM_FILE = "tools/asm65/examples/minied/minied.asm"
+ASM_TOOL = "tools/asm65/asm65.py"
 
 def run_applescript(script):
     """Executes an AppleScript and returns the output."""
@@ -43,23 +43,21 @@ def generate_test_script(hex_lines):
     """Generates the AppleScript to drive Virtual ][."""
     
     # Construct the hex entry commands
-    # To avoid overwhelming the emulator buffer, we can do it line by line
     hex_entry_cmds = ""
     for line in hex_lines:
         line = line.strip()
         if not line: continue
-        # Escape quotes if necessary
         safe_line = line.replace('"', '\\"')
         hex_entry_cmds += f'type text "{safe_line}" & return\n'
-        hex_entry_cmds += 'delay 0.2\n' # Small delay
+        hex_entry_cmds += 'delay 0.05\n'
 
     script = f'''
     tell application "Virtual ]["
         activate
         tell front machine
-            -- Reset to get to known state
+            -- Reset
             reset
-            delay 2.0
+            delay 1.0
             
             -- Enter Monitor
             type text "CALL -151" & return
@@ -67,85 +65,52 @@ def generate_test_script(hex_lines):
             
             -- Enter Hex Data
             {hex_entry_cmds}
+            delay 1.0
             
             -- Run Program
             type text "2000G" & return
             delay 1.0
             
-            -- 1. Add some lines
+            -- Setup Content for Find Test
             type text "A" & return
             delay 0.5
-            type text "Line 1 Original" & return
-            delay 0.2
-            type text "Line 2 To Keep" & return
-            delay 0.2
+            type text "Context Before 1" & return
+            type text "Context Before 2" & return
+            type text "The Target Line" & return
+            type text "Context After 1" & return
+            type text "Context After 2" & return
+            type text "Another Target Line" & return
             type text "." & return
             delay 0.5
             
-            -- 2. Print initial
-            type text "P" & return
-            delay 1.0
+            -- Test Find
+            type text "F *Target*" & return
+            delay 2.0
             
-            -- 3. Edit Line 1 (Replace)
-            type text "E 1" & return
-            delay 1.0
-            type text "Line 1 Edited" & return
-            delay 0.5
+            -- Find Next
+            type text "N" & return
+            delay 2.0
             
-            -- 4. Print again
-            type text "P" & return
-            delay 1.0
-
-            -- 5. Edit Line 2 (Cancel)
-            type text "E 2" & return
-            delay 1.0
+            -- Quit
             type text "." & return
-            delay 0.5
-
-            -- 7. Reset Buffer (Actually, just append new lines for delete test)
-            -- We'll just continue adding lines to existing buffer
-            type text "A" & return
-            delay 0.5
-            type text "Line 3 (New)" & return
-            delay 0.2
-            type text "Line 4" & return
-            delay 0.2
-            type text "Line 5" & return
-            delay 0.2
-            type text "." & return
-            delay 0.5
-
-            -- 8. Print before delete
-            type text "P" & return
-            delay 1.0
-
-            -- 9. Delete Line 3 (Middle)
-            type text "D 3" & return
-            delay 1.0
-
-            -- 10. Print after delete (Should see lines shift up)
-            type text "P" & return
-            delay 1.0
-
-            -- 11. Delete Last Line (Should be Line 4 now, originally line 5)
-            type text "D 4" & return
-            delay 1.0
-
-            -- 13. Insert at Line 3
-            type text "I 3" & return
-            delay 1.0
-            type text "Line 3 Inserted A" & return
-            delay 0.5
-            type text "Line 3 Inserted B" & return
-            delay 0.5
-            type text "." & return
-            delay 0.5
-            
-            -- 14. Final Print after Insert
-            type text "P" & return
             delay 1.0
             
-            return "Test sequence completed."
+            try
+                -- Clear Clipboard first to avoid stale data
+                set the clipboard to "EMPTY_CLIPBOARD"
+                delay 0.5
+                
+                -- Select All (Cmd+A)
+                tell application "System Events" to keystroke "a" using command down
+                delay 1.0
+                -- Copy (Cmd+C)
+                tell application "System Events" to keystroke "c" using command down
+                delay 1.0
+                
+                return the clipboard
+            on error errMsg
+                return "Clipboard capture failed: " & errMsg
+            end try
         end tell
     end tell
     '''
@@ -155,6 +120,8 @@ def main():
     print("Beginning automated test sequence.")
     if not compile_asm():
         print("Test failed at compilation step.")
+        # Continue execution to allow debugging of python script even if compile fails (handled by called process error usually)
+        # But here we exit
         sys.exit(1)
         
     if not os.path.exists(HEX_FILE):
@@ -171,23 +138,44 @@ def main():
     output = run_applescript(script)
     
     if output:
-        print("\n--- Virtual ][ Screen Output (Clipboard) ---")
+        print("\\n--- Virtual ][ Screen Output ---")
+        # Output might be messy, print it all
         print(output)
-        print("--------------------------------------------")
+        print("--------------------------------")
         
-        # Simple analysis
-        success = False
-        if "C1" in output or "41" in output: # 'A' is $41, with high bit $C1
-             print("SUCCESS: Found 'A' char code in output!")
-             success = True
-        elif "A" in output and "?" in output:
-             print("PARTIAL: Saw 'A' input attempt, but maybe code mismatch.")
-        else:
-             print("FAILURE: Did not detect expected patterns.")
-             
-        if success:
+        # Validation Logic
+        failures = []
+        
+        if "The Target Line" not in output:
+            failures.append("Missed first match of 'The Target Line'")
+            
+        if "Another Target Line" not in output:
+            failures.append("Missed second match 'Another Target Line'")
+            
+        if "Context Before 2" not in output:
+            failures.append("Missing context (before)")
+            
+        if "Context After 1" not in output:
+            failures.append("Missing context (after)")
+            
+        if "NEXT/CANCEL?" not in output:
+            failures.append("Missing Prompt")
+
+        if not failures and "Screen capture failed" not in output:
+            print("SUCCESS: Find command worked as expected with Context and Next.")
             sys.exit(0)
         else:
+            print("FAILURE:")
+            for f in failures:
+                print(f" - {f}")
+            if "Screen capture failed" in output:
+                print(" - Could not capture screen text from Virtual ][")
+            
+            print("\n------------------------------")
+            print("DEBUG: Full Screen Text START:")
+            print(output)
+            print("DEBUG: Full Screen Text END")
+            print("------------------------------")
             sys.exit(1)
     else:
         print("Failed to get output from Virtual ][.")

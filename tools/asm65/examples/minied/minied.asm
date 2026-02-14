@@ -95,9 +95,9 @@ cmd_table_end:
 cmd_impl:
     .word 0
 cmd_table:
-    .byte 'A'+$80, 'P'+$80, 'Q'+$80, 'H'+$80, 'E'+$80, 'D'+$80, 'I'+$80, 0
+    .byte 'A'+$80, 'P'+$80, 'Q'+$80, 'H'+$80, 'E'+$80, 'D'+$80, 'I'+$80, 'F'+$80, 0
 cmd_impl_table:
-    .word do_append, do_print, do_quit, do_home, do_edit, do_delete, do_insert, 0
+    .word do_append, do_print, do_quit, do_home, do_edit, do_delete, do_insert, do_find, 0
 
 do_quit:
     rts
@@ -985,6 +985,407 @@ _pd_done:
     lda PD_VAL
     rts
 
+do_find:
+    iny
+_df_skip_space:
+    lda (PTR_L), y
+    bne _df_chk_space
+    jsr PRERR
+    jmp command_loop
+
+_df_chk_space:
+    cmp #' '+$80
+    bne _df_got_arg
+    iny
+    bne _df_skip_space
+    
+_df_got_arg:
+    ldx #0
+_df_copy_pat:
+    lda (PTR_L), y
+    beq _df_end_pat
+    sta $2E00, x
+    iny
+    inx
+    bne _df_copy_pat
+_df_end_pat:
+    lda #0
+    sta $2E00, x
+    cpx #0
+    bne _df_init
+    jsr PRERR
+    jmp command_loop
+
+_df_init:
+
+    lda #<BUFFER_START
+    sta FIND_PTR_CURR
+    lda #>BUFFER_START
+    sta FIND_PTR_CURR+1
+    
+    lda #1
+    sta FIND_LINE_NUM
+    
+    lda #0
+    sta FIND_PTR_PREV1
+    sta FIND_PTR_PREV1+1
+    sta FIND_PTR_PREV2
+    sta FIND_PTR_PREV2+1
+    
+_df_loop:
+    lda LINE_IDX
+    cmp FIND_LINE_NUM
+    bcs _df_check
+    jmp command_loop
+    
+_df_check:
+    lda FIND_PTR_CURR
+    sta PTR_L
+    lda FIND_PTR_CURR+1
+    sta PTR_H
+    
+    lda #<$2E00
+    sta EDIT_PTR_L
+    lda #>$2E00
+    sta EDIT_PTR_H
+    
+    jsr glob_match
+    bcc _df_next
+    
+    jsr print_context
+    
+    lda #'N'+$80
+    sta PROMPT_CHAR
+    
+    lda #<msg_next
+    ldx #>msg_next
+    jsr puts
+    
+    lda #<CMD_BUFFER
+    sta PTR_L
+    lda #>CMD_BUFFER
+    sta PTR_H
+    jsr get_line_monitor
+    
+    ldy #0
+    lda (PTR_L), y
+    cmp #'C'+$80
+    beq _df_finish_jmp
+    cmp #'c'+$80
+    beq _df_finish_jmp
+    cmp #'.'+$80
+    beq _df_finish_jmp
+    
+_df_next:
+    lda FIND_PTR_PREV1
+    sta FIND_PTR_PREV2
+    lda FIND_PTR_PREV1+1
+    sta FIND_PTR_PREV2+1
+    
+    lda FIND_PTR_CURR
+    sta FIND_PTR_PREV1
+    lda FIND_PTR_CURR+1
+    sta FIND_PTR_PREV1+1
+    
+    ldy #0
+    lda FIND_PTR_CURR
+    sta PTR_L
+    lda FIND_PTR_CURR+1
+    sta PTR_H
+    
+_df_scan_null:
+    lda (PTR_L), y
+    beq _df_found_null
+    iny
+    bne _df_scan_null
+    
+_df_found_null:
+    tya
+    clc
+    adc #1
+    adc PTR_L
+    sta FIND_PTR_CURR
+    lda PTR_H
+    adc #0
+    sta FIND_PTR_CURR+1
+    
+    inc FIND_LINE_NUM
+    jmp _df_loop
+
+_df_finish_jmp:
+    jmp command_loop
+
+_df_no_arg:
+    jsr PRERR
+    jmp command_loop
+
+glob_match:
+    ldy #0
+    lda (EDIT_PTR_L), y
+    bne _gm_check_stars
+    lda (PTR_L), y
+    beq _gm_match_ok
+    clc
+    rts
+_gm_match_ok:
+    sec
+    rts
+
+_gm_check_stars:
+    cmp #'*'+$80
+    beq _gm_is_star
+    jmp _gm_check_q
+    
+_gm_is_star:
+    
+    iny
+    lda (EDIT_PTR_L), y
+    bne _gm_star_recurse
+    sec
+    rts
+
+_gm_star_recurse:
+    lda PTR_L
+    pha
+    lda PTR_H
+    pha
+    lda EDIT_PTR_L
+    pha
+    lda EDIT_PTR_H
+    pha
+    
+    inc EDIT_PTR_L
+    bne 1f
+    inc EDIT_PTR_H
+1:
+
+_gm_star_loop:
+    jsr glob_match
+    bcs _gm_star_found
+    
+    ldy #0
+    lda (PTR_L), y
+    beq _gm_star_fail
+    
+    inc PTR_L
+    bne 1f
+    inc PTR_H
+1:
+    jmp _gm_star_loop
+
+_gm_star_found:
+    pla
+    sta EDIT_PTR_H
+    pla
+    sta EDIT_PTR_L
+    pla
+    sta PTR_H
+    pla
+    sta PTR_L
+    sec
+    rts
+
+_gm_star_fail:
+    pla
+    sta EDIT_PTR_H
+    pla
+    sta EDIT_PTR_L
+    pla
+    sta PTR_H
+    pla
+    sta PTR_L
+    clc
+    rts
+
+_gm_check_q:
+    cmp #'?'+$80
+    beq _gm_char_match
+    
+    cmp (PTR_L), y
+    bne _gm_fail
+    
+_gm_char_match:
+    lda (PTR_L), y
+    beq _gm_fail
+    
+    inc PTR_L
+    bne 1f
+    inc PTR_H
+1:
+    inc EDIT_PTR_L
+    bne 1f
+    inc EDIT_PTR_H
+1:
+    jmp glob_match
+
+_gm_fail:
+    clc
+    rts
+
+print_context:
+    lda #'-'+$80
+    jsr COUT
+    jsr COUT
+    jsr CROUT
+
+    lda FIND_PTR_PREV2+1
+    beq _pc_prev1
+    
+    lda FIND_PTR_PREV2
+    sta PTR_L
+    lda FIND_PTR_PREV2+1
+    sta PTR_H
+    lda FIND_LINE_NUM
+    sec
+    sbc #2
+    jsr print_line_at_ptr
+    
+_pc_prev1:
+    lda FIND_PTR_PREV1+1
+    beq _pc_curr
+    
+    lda FIND_PTR_PREV1
+    sta PTR_L
+    lda FIND_PTR_PREV1+1
+    sta PTR_H
+    lda FIND_LINE_NUM
+    sec
+    sbc #1
+    jsr print_line_at_ptr
+
+_pc_curr:
+    lda FIND_PTR_CURR
+    sta PTR_L
+    sta TEMP_PTR_L
+    lda FIND_PTR_CURR+1
+    sta PTR_H
+    sta TEMP_PTR_H
+    
+    lda FIND_LINE_NUM
+    jsr print_line_highlighted
+    
+
+    
+    jsr _pc_advance_temp
+    beq _pc_done
+    
+    lda TEMP_PTR_L
+    sta PTR_L
+    lda TEMP_PTR_H
+    sta PTR_H
+    lda FIND_LINE_NUM
+    clc
+    adc #1
+    cmp LINE_IDX
+    beq _pc_print_next1
+    bcs _pc_done
+_pc_print_next1:
+    jsr print_line_at_ptr
+    
+    jsr _pc_advance_temp
+    beq _pc_done
+    
+    lda TEMP_PTR_L
+    sta PTR_L
+    lda TEMP_PTR_H
+    sta PTR_H
+    lda FIND_LINE_NUM
+    clc
+    adc #2
+    cmp LINE_IDX
+    beq _pc_print_next2
+    bcs _pc_done
+_pc_print_next2:
+    jsr print_line_at_ptr
+
+_pc_done:
+    rts
+
+_pc_advance_temp:
+    lda TEMP_PTR_L
+    sta EDIT_PTR_L
+    lda TEMP_PTR_H
+    sta EDIT_PTR_H
+    
+    ldy #0
+_pc_scan:
+    lda (EDIT_PTR_L), y
+    beq _pc_found
+    iny
+    bne _pc_scan
+_pc_found:
+    tya
+    clc
+    adc #1
+    adc TEMP_PTR_L
+    sta TEMP_PTR_L
+    lda TEMP_PTR_H
+    adc #0
+    sta TEMP_PTR_H
+    
+    lda TEMP_PTR_L
+    cmp TEXT_PTR_L
+    bne 1f
+    lda TEMP_PTR_H
+    cmp TEXT_PTR_H
+    beq _pc_at_end
+1:  lda #1
+    rts
+_pc_at_end:
+    lda #0
+    rts
+
+print_line_at_ptr:
+    jsr PRDEC
+    lda #':'+$80
+    jsr COUT
+    lda #' '+$80
+    jsr COUT
+    
+    ldy #0
+_pl_loop:
+    lda (PTR_L),y
+    beq _pl_done
+    jsr COUT
+    iny
+    bne _pl_loop
+_pl_done:
+    jsr CROUT
+    rts
+
+print_line_highlighted:
+    jsr PRDEC
+    lda #':'+$80
+    jsr COUT
+    lda #' '+$80
+    jsr COUT
+    
+    ldy #0
+_plh_loop:
+    lda (PTR_L),y
+    beq _plh_done
+    
+    ; Convert to Inverse
+    ; Clear bit 7 (Normal -> 0xxxxxxx)
+    ; Clear bit 6 (Normal -> 00xxxxxx)
+    ; Standard Inverse is $00-$3F
+    cmp #'a'+$80
+    bcc _plh_inv
+    cmp #'z'+$80+1
+    bcs _plh_inv
+    and #$DF ; Convert low to up
+_plh_inv:
+    and #$3F
+    jsr COUT
+    iny
+    bne _plh_loop
+_plh_done:
+    jsr CROUT
+    rts
+
+msg_next:
+    .byte "NEXT/CANCEL? ", 0
+
 msg_welcome:
     .byte "MINIED 1.1", $0d, 0
     
@@ -1006,3 +1407,7 @@ SHIFT_BLOCK_START_H: .byte 0
 TEMP_PTR_L: .byte 0
 TEMP_PTR_H: .byte 0
 SHIFT_DIFF_L: .byte 0
+FIND_PTR_CURR: .word 0
+FIND_PTR_PREV1: .word 0
+FIND_PTR_PREV2: .word 0
+FIND_LINE_NUM: .byte 0
