@@ -122,6 +122,25 @@ class Compiler:
              else:
                  raise CompilerError(f"Unknown CPU mode: {mode_str}", d)
 
+        elif d.name == '.align':
+             alignment = self.resolve_expr(d.args[0])
+             if alignment is None:
+                 if self.pass_num == 1: alignment = 1 
+                 else: raise CompilerError("Could not resolve alignment value", d)
+             
+             if alignment <= 0:
+                 raise CompilerError("Alignment must be positive", d)
+
+             # Calculate padding needed to align PC
+             # logical PC (self.pc) or output PC?
+             # Assembler usually aligns current PC. 
+             # .org changes PC.
+             remainder = self.pc % alignment
+             if remainder > 0:
+                 padding = alignment - remainder
+                 for _ in range(padding):
+                     self.emit_byte(0) # Pad with 0
+
     def visit_instruction(self, inst: Instruction):
         opcode = 0
         mode = inst.mode

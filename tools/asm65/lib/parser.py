@@ -144,9 +144,7 @@ class Parser:
         # Here we can just parse expression list?
         if name in ['.byte', '.word', '.fill']:
              args = self.parse_expr_list()
-        elif name == '.org':
-             args = [self.parse_expr()]
-        elif name == '.cpu':
+        elif name in ['.org', '.cpu', '.align']:
              args = [self.parse_expr()]
         
         self.require(TokenType.EOL)
