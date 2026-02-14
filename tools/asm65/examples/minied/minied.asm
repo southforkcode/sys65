@@ -50,24 +50,30 @@ command_loop:
     
     ; Check first char
     ldy #0
-    lda (PTR_L), Y
     
     ; Match handling for both 'a' and 'A'
     ; Make case insensitive (force upper case)
     and #$DF ; Convert to upper case (0x61->0x41, 0xE1->0xC1) - effectively clears bit 5
     
-    cmp #'A'+$80
-    beq do_append
-    
-    cmp #'P'+$80
-    beq do_print
-    
-    cmp #'Q'+$80
-    beq do_quit
+    ; look up command from cmd_table
+    ldx #0
+1:  lda cmd_table,x
+    beq cmd_table_end
+    cmp (PTR_L),y
+    beq 1f
+    inx
+    jmp 1b
+1:  txa
+    asl a
+    tax
+    lda cmd_impl_table,x
+    sta cmd_impl
+    inx
+    lda cmd_impl_table,x
+    sta cmd_impl+1
+    jmp (cmd_impl)
 
-    cmp #'H'+$80
-    beq do_home
-    
+cmd_table_end:    
     ; Unknown command (unless empty line)
     cmp #0 ; End of string?
     beq command_loop ; Just ignore empty line
@@ -77,6 +83,13 @@ command_loop:
     jsr BELL
     jsr CROUT
     jmp command_loop
+
+cmd_impl:
+    .word 0
+cmd_table:
+    .byte 'A'+$80, 'P'+$80, 'Q'+$80, 'H'+$80, 0
+cmd_impl_table:
+    .word do_append, do_print, do_quit, do_home, 0
 
 do_quit:
     rts

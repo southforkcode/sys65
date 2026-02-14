@@ -96,7 +96,9 @@ class Compiler:
         elif d.name == '.word':
             for arg in d.args:
                 val = self.resolve_expr(arg)
-                if val is None: val = 0
+                if val is None: 
+                    if self.pass_num == 2: raise CompilerError("Unresolved symbol in .word", d)
+                    val = 0
                 self.emit_word(val)
         elif d.name == '.fill':
              count = self.resolve_expr(d.args[0]) or 0
@@ -168,7 +170,10 @@ class Compiler:
             size = 1
         elif mode == '#':
             size = 2
-            operand_val = self.resolve_expr(operand) or 0
+            operand_val = self.resolve_expr(operand)
+            if operand_val is None:
+                if self.pass_num == 2: raise CompilerError(f"Unresolved symbol in {inst.mnemonic}", inst)
+                operand_val = 0
         elif mode == 'REL':
             size = 2
             if self.pass_num == 2:
@@ -204,7 +209,10 @@ class Compiler:
                 operand_val = val
             else:
                  size = 3
-                 operand_val = val or 0
+                 if val is None:
+                     if self.pass_num == 2: raise CompilerError(f"Unresolved symbol in {inst.mnemonic}", inst)
+                     val = 0
+                 operand_val = val
         elif mode in ['IND', 'INDX', 'INDY']:
              # IND (JMP) is 3 bytes. INDX/INDY are ZP indirects (2 bytes).
              # 65C02 adds:
@@ -225,7 +233,10 @@ class Compiler:
                      size = 2
              else: # INDY
                  size = 2
-             operand_val = self.resolve_expr(operand) or 0
+             operand_val = self.resolve_expr(operand)
+             if operand_val is None:
+                 if self.pass_num == 2: raise CompilerError(f"Unresolved symbol in {inst.mnemonic}", inst)
+                 operand_val = 0
         
         # Emit
         if self.pass_num == 1:
