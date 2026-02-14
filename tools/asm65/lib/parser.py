@@ -96,6 +96,17 @@ class Parser:
                 return Assignment(tok.lexeme, value)
             else:
                 return self.parse_instruction(tok)
+        # Local numeric label definion e.g. "1:"
+        elif tok := self.expect(TokenType.NUM):
+             if self.expect(TokenType.OP, ':'):
+                 # Convert numeric value to string for label name
+                 # Or just use lexeme? Lexeme for NUM 1 is "1".
+                 return Label(tok.lexeme)
+             else:
+                 # Start with number but not label?
+                 # Could be instruction? No instruction starts with number.
+                 # Could be error?
+                 raise ParserError(f"Unexpected number at start of statement: {tok.lexeme}", tok)
         else:
             tok = self.peektok()
             raise ParserError(f"Unknown token: {tok.lexeme if tok else 'EOF'}", tok)
@@ -288,6 +299,8 @@ class Parser:
 
         if tok := self.expect(TokenType.NUM):
             return tok.value
+        if tok := self.expect(TokenType.LOCAL_LABEL_REF):
+            return Unresolved(tok.lexeme, 'LOCAL_REL')
         if tok := self.expect(TokenType.ID):
             # AST always treats ID as Unresolved at parse time? 
             # Or should strict value be resolved later?

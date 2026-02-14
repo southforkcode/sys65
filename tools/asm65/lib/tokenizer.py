@@ -11,6 +11,7 @@ class TokenType(Enum):
   NUM = 5
   STR = 6
   OP = 7
+  LOCAL_LABEL_REF = 8
 
 class Token:
   def __init__(self, type: TokenType, lexeme: str, value: str|int|None, line: int):
@@ -49,6 +50,7 @@ class Tokenizer:
             (TokenType.NUM, r'0x[0-9a-fA-F]+'),      # Hex 0x12
             (TokenType.NUM, r'%[01]+'),              # Binary %101
             (TokenType.NUM, r'0b[01]+'),             # Binary 0b101
+            (TokenType.LOCAL_LABEL_REF, r'[0-9]+[fb]'), # Local label reference 1f, 1b
             (TokenType.NUM, r'[0-9]+'),              # Decimal
             # Only support simple chars for now
             (TokenType.STR, r'"[^"]*"'),             # String "..."

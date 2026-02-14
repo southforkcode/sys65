@@ -14,6 +14,7 @@ class CompilerError(Exception):
 class Compiler:
     def __init__(self):
         self.symbols = SymbolTable()
+        self.local_labels = {} # Map name -> List[int]
         self.bytes = bytearray()
         self.origin = 0
         self.pc = 0 # Program Counter
@@ -25,6 +26,8 @@ class Compiler:
         # Pass 1: Calculate addresses and define labels
         self.pass_num = 1
         self.pc = 0
+        self.pc = 0
+        self.local_labels = {} # reset
         self.origin = 0 # reset
         self.start_origin = None # Track first .org
         self.cpu_mode = "6502"
@@ -49,7 +52,12 @@ class Compiler:
     def visit_statement(self, stmt: Statement):
         if isinstance(stmt, Label):
             if self.pass_num == 1:
-                self.symbols.set(stmt.name, self.pc)
+                if stmt.name.isdigit():
+                    if stmt.name not in self.local_labels:
+                        self.local_labels[stmt.name] = []
+                    self.local_labels[stmt.name].append(self.pc)
+                else:
+                    self.symbols.set(stmt.name, self.pc)
         elif isinstance(stmt, Assignment):
             if self.pass_num == 1:
                 # Value must be resolvable in pass 1 for constants?
@@ -248,8 +256,66 @@ class Compiler:
     def resolve_expr(self, expr):
         if isinstance(expr, int): return expr
         if isinstance(expr, Unresolved):
+
             if expr.type == 'ADDRESS':
                 return self.symbols.get(expr.name)
+            if expr.type == 'LOCAL_REL':
+                # Parse "1f" or "1b"
+                direction = expr.name[-1]
+                label_name = expr.name[:-1]
+                
+                if label_name not in self.local_labels:
+                    # In pass 1, might not be seen yet (forward ref), return 0
+                    if self.pass_num == 1: return 0
+                    return None
+                    
+                locations = self.local_labels[label_name]
+                
+                # Use current PC to find closest
+                # PC is at start of instruction? Yes, self.pc tracks it.
+                # However, during operand resolution, self.pc is at start of this instruction.
+                current_pc = self.pc
+                
+                target = None
+                
+                if direction == 'f':
+                    # Find first location > current_pc
+                    # locations should be sorted as we append in order
+                    for loc in locations:
+                        if loc > current_pc:
+                            target = loc
+                            break
+                    
+                    if target is None:
+                         # Pass 1: might not be seen yet
+                         if self.pass_num == 1: return 0
+                         return None
+                         
+                elif direction == 'b':
+                    # Find last location <= current_pc
+                    # Actually local label definition is unlikely to be AT current PC 
+                    # unless label is defined inside instruction? Impossible.
+                    # Usually label is before instruction.
+                    # so < current_pc.
+                    # "b" searches backwards from current instruction.
+                    # so we want max(loc) where loc < current_pc?
+                    # Or <= ? If we are at "1: beq 1b". PC is at beq. Label 1 is at beq.
+                    # That loops to itself.
+                    # So <= is correct.
+                    
+                    # Iterate backwards
+                    for loc in reversed(locations):
+                        if loc <= current_pc:
+                            target = loc
+                            break
+                    
+                    if target is None:
+                         # Pass 1: return 0
+                         if self.pass_num == 1: return 0
+                         return None
+                
+                return target
+
             # Handle LOW/HIGH logic here or during emit?
             # If value is resolved, apply low/high.
             val = self.symbols.get(expr.name)

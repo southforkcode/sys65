@@ -30,8 +30,10 @@ start:
     
     lda #0
     sta LINE_IDX
-    
-    jsr print_welcome
+
+    lda #<msg_welcome
+    ldx #>msg_welcome
+    jsr puts
 
 command_loop:
     ; Set Prompt for Monitor GETLN
@@ -62,20 +64,26 @@ command_loop:
     
     cmp #'Q'+$80
     beq do_quit
+
+    cmp #'H'+$80
+    beq do_home
     
     ; Unknown command (unless empty line)
     cmp #0 ; End of string?
     beq command_loop ; Just ignore empty line
     
     ; Unknown command
-    lda #$BF ; '?' with high bit
-    jsr COUT
-    lda #CR
-    jsr COUT
+    jsr PRERR
+    jsr BELL
+    jsr CROUT
     jmp command_loop
 
 do_quit:
     rts
+
+do_home:
+    jsr HOME
+    jmp command_loop
 
 do_print:
     ; Print all lines
@@ -189,22 +197,22 @@ copy_done:
     sta (PTR_L), Y
     rts
 
-print_welcome:
-    ldx #0
-w_loop:
-    lda msg_welcome, X
-    beq w_done
+puts:
+    sta PTR_L
+    stx PTR_H
+    ldy #0
+puts_loop:
+    lda (PTR_L),y
+    beq puts_done
     ora #$80
     jsr COUT
-    inx
-    jmp w_loop
-w_done:
-    lda #CR
-    jsr COUT
+    iny
+    bne puts_loop
+puts_done:
     rts
 
 msg_welcome:
-    .byte "MINIED 1.1", 0
+    .byte "MINIED 1.1", $0d, 0
     
 LINE_IDX:
     .byte 0
