@@ -25,16 +25,6 @@
     ; Shift content DOWN (to lower addresses)
     ; Used by delete operations.
     ; Reads from SHIFT_SRC, Writes to SHIFT_DEST
-    ; TODO: Generic memmove(src, dest, length) - handle overlap check.
-;
-; TODO REFACTORING IDEAS:
-; -----------------------
-;
-; 2. Memory Moves: `shift_up` and `shift_down` are specific to global pointers.
-;    Make them generic `memmove` routines.
-;
-; 3. Argument Parsing: Commands parse decimal headers manually. Consolidate.
-; ==============================================================================
 
 .org $2000
 
@@ -164,25 +154,9 @@ do_home:
 do_print:
     ; Parse optional arguments
     ; Y points to command char 'P' in CMD_BUFFER
-    ; TODO: Refactor argument parsing (Duplicate logic in do_edit/do_delete)
-    iny
+    jsr parse_arg
+    bcs _dp_no_arg ; C set = No arg
     
-_dp_skip_space:
-    lda (PTR_L), y
-    beq _dp_no_arg
-    cmp #' '+$80
-    bne _dp_check_arg
-    iny
-    bne _dp_skip_space
-    
-_dp_check_arg:
-    cmp #'0'+$80
-    bcc _dp_no_arg ; Not a digit
-    cmp #'9'+$80+1
-    bcs _dp_no_arg ; Not a digit
-    
-    ; Parse digit
-    jsr PARSE_DECIMAL
     sta TARGET_LINE
     jmp _dp_start
     
@@ -312,26 +286,10 @@ stop_append:
 
 do_edit:
     ; 1. Parse argument
-    iny
-_de_skip_space:
-    lda (PTR_L), y
-    beq _de_jmp_no_arg
-    cmp #' '+$80
-    bne _de_check_arg
-    iny
-    bne _de_skip_space
-
-_de_jmp_no_arg:
+    jsr parse_arg
+    bcc 1f
     jmp _de_no_arg
-    
-_de_check_arg:
-    cmp #'0'+$80
-    bcc _de_jmp_no_arg
-    cmp #'9'+$80+1
-    bcs _de_jmp_no_arg
-    
-    jsr PARSE_DECIMAL
-    sta TARGET_LINE
+1:  sta TARGET_LINE
     
     ; Check if valid (1 <= TARGET <= LINE_IDX)
     lda TARGET_LINE
@@ -508,23 +466,10 @@ _dd_jmp_no_arg:
 
 do_delete:
     ; 1. Parse argument
-    iny
-_dd_skip_space:
-    lda (PTR_L), y
-    beq _dd_jmp_no_arg
-    cmp #' '+$80
-    bne _dd_check_arg
-    iny
-    bne _dd_skip_space
-
-_dd_check_arg:
-    cmp #'0'+$80
-    bcc _dd_no_arg
-    cmp #'9'+$80+1
-    bcs _dd_no_arg
-    
-    jsr PARSE_DECIMAL
-    sta TARGET_LINE
+    jsr parse_arg
+    bcc 1f
+    jmp _dd_no_arg
+1:  sta TARGET_LINE
     
     ; Check if valid (1 <= TARGET <= LINE_IDX)
     lda TARGET_LINE
@@ -597,26 +542,10 @@ _dd_no_arg:
 
 do_insert:
     ; 1. Parsing similar to others
-    iny
-_di_skip_space:
-    lda (PTR_L), y
-    bne _di_check_arg_trampoline
+    jsr parse_arg
+    bcc 1f
     jmp _di_no_arg
-
-_di_check_arg_trampoline:
-    cmp #' '+$80
-    bne _di_check_arg
-    iny
-    bne _di_skip_space
-    
-_di_check_arg:
-    cmp #'0'+$80
-    bcc _di_no_arg_trampoline
-    cmp #'9'+$80+1
-    bcs _di_no_arg_trampoline
-    
-    jsr PARSE_DECIMAL
-    sta TARGET_LINE
+1:  sta TARGET_LINE
     jmp _di_check_range
 
 _di_no_arg_trampoline:
@@ -976,6 +905,37 @@ _pd_loop:
     bne _pd_loop
 _pd_done:
     lda PD_VAL
+    rts
+
+; Parse optional decimal argument
+; Inputs: PTR = Command Buffer
+;         Y = Current Index (pointing to command char)
+; Outputs: A = Parsed Value
+;          Y = Updated Index
+;          C = Clear if valid argument found
+;          C = Set if no argument found or invalid
+parse_arg:
+    iny ; Skip command char or previous char
+_pa_skip_space:
+    lda (PTR_L), y
+    beq _pa_no_arg
+    cmp #' '+$80
+    bne _pa_check_arg
+    iny
+    bne _pa_skip_space
+
+_pa_check_arg:
+    cmp #'0'+$80
+    bcc _pa_no_arg
+    cmp #'9'+$80+1
+    bcs _pa_no_arg
+    
+    jsr PARSE_DECIMAL
+    clc ; Success
+    rts
+
+_pa_no_arg:
+    sec ; Failure/No Arg
     rts
 
 do_find:
