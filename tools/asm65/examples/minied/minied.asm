@@ -29,10 +29,6 @@
 ;
 ; TODO REFACTORING IDEAS:
 ; -----------------------
-; 1. Line Finding Logic: The logic to traverse the buffer to find a specific
-;    line number is duplicated in `do_edit`, `do_delete`, `do_insert`, etc.
-;    Refactor into a `find_line_addr` routine that accepts a line number in A
-;    and returns the address in a ZP pointer.
 ;
 ; 2. Memory Moves: `shift_up` and `shift_down` are specific to global pointers.
 ;    Make them generic `memmove` routines.
@@ -62,6 +58,14 @@ SHIFT_SRC_L = $0C
 SHIFT_SRC_H = $0D
 SHIFT_DEST_L = $0E
 SHIFT_DEST_H = $0F
+
+; Generic Memory Move Variables (Aliased for now, or new)
+MEM_SRC_L  = $0C ; Same as SHIFT_SRC
+MEM_SRC_H  = $0D
+MEM_DEST_L = $0E ; Same as SHIFT_DEST
+MEM_DEST_H = $0F
+MEM_END_L  = $10 ; New ZP variable for End of Source Block
+MEM_END_H  = $11
 
 BUFFER_START = $3000
 MAX_BUFFER_SIZE = $5000 ; 20KB limit (up to $8000)
@@ -107,8 +111,13 @@ command_loop:
     ; look up command from cmd_table
     ldx #0
 1:  lda (PTR_L),y 
-    ; Convert to upper case (0x61->0x41, 0xE1->0xC1) - effectively clears bit 5
+    ; Convert to upper case (0x61->0x41, 0xE1->0xC1) - ONLY if 'a'..'z'
+    cmp #'a'+$80
+    bcc _cl_no_case
+    cmp #'z'+$80+1
+    bcs _cl_no_case
     and #$DF
+_cl_no_case:
     cmp cmd_table,x
     beq 1f
     inx
@@ -127,8 +136,10 @@ command_loop:
 
 cmd_table_end:    
     ; Unknown command (unless empty line)
-    cmp #0 ; End of string?
-    beq command_loop ; Just ignore empty line
+    ; Check if buffer is empty (first char is 0)
+    ldy #0
+    lda (PTR_L), y
+    beq command_loop ; Just ignore empty line (null char)
     
     ; Unknown command
     jsr PRERR
@@ -139,9 +150,9 @@ cmd_table_end:
 cmd_impl:
     .word 0
 cmd_table:
-    .byte 'A'+$80, 'P'+$80, 'Q'+$80, 'H'+$80, 'E'+$80, 'D'+$80, 'I'+$80, 'F'+$80, 'B'+$80, 0
+    .byte 'A'+$80, 'P'+$80, 'Q'+$80, 'H'+$80, 'E'+$80, 'D'+$80, 'I'+$80, 'F'+$80, 'B'+$80, '?'+$80, 0
 cmd_impl_table:
-    .word do_append, do_print, do_quit, do_home, do_edit, do_delete, do_insert, do_find, do_buffer_status, 0
+    .word do_append, do_print, do_quit, do_home, do_edit, do_delete, do_insert, do_find, do_buffer_status, do_help, 0
 
 do_quit:
     rts
@@ -336,36 +347,14 @@ _de_jmp_invalid:
 _de_valid_chk:
     
     ; 2. Find line address
-    ; TODO: Refactor Line Finding.
-    ; This loop structure is repeated in do_delete and do_insert.
-    ; extract to `find_line_address(A=LineNum) -> Returns (PTR)`.
-    lda #<BUFFER_START
-    sta EDIT_PTR_L
-    lda #>BUFFER_START
-    sta EDIT_PTR_H
+    lda TARGET_LINE
+    jsr find_line_addr
     
-    ldx TARGET_LINE
-    dex
-    beq _de_found_line
-    
-_de_find_loop:
-    ldy #0
-_de_scan_line:
-    lda (EDIT_PTR_L), y
-    beq _de_next_line
-    iny
-    bne _de_scan_line
-_de_next_line:
-    tya
-    clc
-    adc #1
-    adc EDIT_PTR_L
+    ; Copy PTR to EDIT_PTR
+    lda PTR_L
     sta EDIT_PTR_L
-    lda EDIT_PTR_H
-    adc #0
+    lda PTR_H
     sta EDIT_PTR_H
-    dex
-    bne _de_find_loop
     
 _de_found_line:
     ; 3. Print current line
@@ -546,33 +535,14 @@ _dd_check_arg:
 
 _dd_valid_chk:
     ; 2. Find line address (store in SHIFT_DEST)
-    lda #<BUFFER_START
-    sta SHIFT_DEST_L
-    lda #>BUFFER_START
-    sta SHIFT_DEST_H
+    lda TARGET_LINE
+    jsr find_line_addr
     
-    ldx TARGET_LINE
-    dex
-    beq _dd_found_line
-    
-_dd_find_loop:
-    ldy #0
-_dd_scan_line:
-    lda (SHIFT_DEST_L), y
-    beq _dd_next_line
-    iny
-    bne _dd_scan_line
-_dd_next_line:
-    tya
-    clc
-    adc #1
-    adc SHIFT_DEST_L
+    ; Copy PTR to SHIFT_DEST
+    lda PTR_L
     sta SHIFT_DEST_L
-    lda SHIFT_DEST_H
-    adc #0
+    lda PTR_H
     sta SHIFT_DEST_H
-    dex
-    bne _dd_find_loop
 
 _dd_found_line:
     ; SHIFT_DEST points to start of line to delete.
@@ -671,42 +641,16 @@ _di_invalid_jmp:
 _di_find_start:
 _di_find_start_entry:
     ; 2. Find Address of desired line
-    lda #<BUFFER_START
-    sta EDIT_PTR_L ; Using EDIT_PTR to hold insertion point
-    lda #>BUFFER_START
+    lda TARGET_LINE
+    jsr find_line_addr
+    
+    ; Copy PTR to EDIT_PTR
+    lda PTR_L
+    sta EDIT_PTR_L
+    lda PTR_H
     sta EDIT_PTR_H
     
-    ldx TARGET_LINE
-    dex
-    bne _di_start_loop
     jmp _di_input_loop
-
-_di_start_loop:
-    jmp _di_find_loop_entry
-
-_di_find_loop_entry: ; Used as label
-_di_find_loop:
-    ldy #0
-_di_scan:
-    lda (EDIT_PTR_L), y
-    beq _di_next
-    iny
-    bne _di_scan
-_di_next:
-    tya
-    clc
-    adc #1
-    adc EDIT_PTR_L
-    sta EDIT_PTR_L
-    lda EDIT_PTR_H
-    adc #0
-    sta EDIT_PTR_H
-    dex
-    bne _di_find_loop_trampoline_2
-    jmp _di_input_loop
-
-_di_find_loop_trampoline_2:
-    jmp _di_find_loop_entry
     
 _di_input_loop:
     ; Prompt
@@ -802,108 +746,91 @@ _de_no_arg:
     jmp command_loop
 
 shift_down:
-    ; Copy from SRC to DEST until SRC == TEXT_PTR
-    ; Forward copy
-_sd_loop:
-    lda SHIFT_SRC_L
-    cmp TEXT_PTR_L
-    bne _sd_copy
-    lda SHIFT_SRC_H
-    cmp TEXT_PTR_H
-    beq _sd_finish
-_sd_copy:
-    ldy #0
-    lda (SHIFT_SRC_L), y
-    sta (SHIFT_DEST_L), y
+    ; Shift content DOWN (to lower addresses)
+    ; Used by delete operations.
+    ; Reads from SHIFT_SRC, Writes to SHIFT_DEST
+    ; Refactored to use generic memmove.
     
-    ; Increment 16-bit pointers for next iteration
-    inc SHIFT_SRC_L
-    bne 1f
-    inc SHIFT_SRC_H
-1:  inc SHIFT_DEST_L
-    bne 1f
-    inc SHIFT_DEST_H
-1:  jmp _sd_loop
+    ; 1. Setup MEM_END = TEXT_PTR
+    lda TEXT_PTR_L
+    sta MEM_END_L
+    lda TEXT_PTR_H
+    sta MEM_END_H
     
-_sd_finish:
-    ; Update TEXT_PTR = DEST
+    ; 2. Calculate New End
+    ; New End = MEM_DEST + (MEM_END - MEM_SRC)
+    
+    lda MEM_END_L
+    sec
+    sbc SHIFT_SRC_L
+    sta SHIFT_DIFF_L
+    lda MEM_END_H
+    sbc SHIFT_SRC_H
+    sta TEMP_PTR_H
+    
+    ; New End = MEM_DEST + Len
     lda SHIFT_DEST_L
-    sta TEXT_PTR_L
+    clc
+    adc SHIFT_DIFF_L
+    sta TEMP_PTR_L
     lda SHIFT_DEST_H
+    adc TEMP_PTR_H
+    sta TEMP_PTR_H
+    
+    ; 3. Call memmove
+    ; MEM_SRC = SHIFT_SRC
+    ; MEM_DEST = SHIFT_DEST
+    ; MEM_END = TEXT_PTR
+    ; These are already set up by the calling routine (delete)
+    jsr memmove
+    
+    ; 4. Update TEXT_PTR
+    lda TEMP_PTR_L
+    sta TEXT_PTR_L
+    lda TEMP_PTR_H
     sta TEXT_PTR_H
+    
     rts
 
 shift_up:
     ; Expand buffer.
     ; Copy backwards.
-    ; First, calculate how much we are shifting by and set pointers
-    
-    ; Calc Diff
-    lda SHIFT_DEST_L
-    sec
-    sbc SHIFT_SRC_L
-    sta SHIFT_DIFF_L
-    
-    ; DEST_PTR (Use TEMP variable for write pointer) = TEXT_PTR + Diff
+    ; 1. Setup MEM_END = TEXT_PTR
     lda TEXT_PTR_L
+    sta MEM_END_L
+    lda TEXT_PTR_H
+    sta MEM_END_H
+    
+    ; 2. Calculate New End (Return value logic moved here)
+    ; New End = MEM_DEST + (MEM_END - MEM_SRC)
+    ; We need this to update TEXT_PTR after the move.
+    
+    lda MEM_END_L
+    sec
+    sbc MEM_SRC_L
+    sta SHIFT_DIFF_L ; Save Len L for calculation
+    lda MEM_END_H
+    sbc MEM_SRC_H
+    sta TEMP_PTR_H ; Save Len H for calculation (reuse TEMP_PTR_H)
+    
+    ; New End = MEM_DEST + Len
+    lda MEM_DEST_L
     clc
     adc SHIFT_DIFF_L
     sta TEMP_PTR_L
-    lda TEXT_PTR_H
-    adc #0 ; Carry prop
+    lda MEM_DEST_H
+    adc TEMP_PTR_H
     sta TEMP_PTR_H
     
-    ; Save New End of Buffer position
-    lda TEMP_PTR_L
-    sta SHIFT_DEST_L
-    lda TEMP_PTR_H
-    sta SHIFT_DEST_H 
+    ; 3. Call memmove (MEM_SRC, MEM_DEST matched by aliases)
+    jsr memmove
     
-    ; shift_up now needs to read from TEXT_PTR (going backwards) 
-    ; and write to SHIFT_DEST (going backwards)
-    ; until TEXT_PTR reaches SHIFT_SRC.
-    ; available at SHIFT_SRC.
-    ;
-    ; TODO: Make generic memmove(src, dest, length)
-    
-_su_loop:
-    ; Check if Read Pointer (TEXT_PTR) == SHIFT_SRC
-    lda TEXT_PTR_L
-    cmp SHIFT_SRC_L
-    bne _su_do
-    lda TEXT_PTR_H
-    cmp SHIFT_SRC_H
-    beq _su_finish
-    
-_su_do:
-    ; Pre-decrement Pointers
-    
-    ; Dec Write Pointer (SHIFT_DEST)
-    lda SHIFT_DEST_L
-    bne 1f
-    dec SHIFT_DEST_H
-1:  dec SHIFT_DEST_L
-    
-    ; Dec Read Pointer (TEXT_PTR)
-    ; TEXT_PTR is being used as READ_PTR here
-    lda TEXT_PTR_L
-    bne 1f
-    dec TEXT_PTR_H
-1:  dec TEXT_PTR_L
-    
-    ; Copy
-    ldy #0
-    lda (TEXT_PTR_L), y ; Read
-    sta (SHIFT_DEST_L), y ; Write
-    
-    jmp _su_loop
-    
-_su_finish:
-    ; Update global TEXT_PTR to New End
+    ; 4. Update Global TEXT_PTR
     lda TEMP_PTR_L
     sta TEXT_PTR_L
     lda TEMP_PTR_H
     sta TEXT_PTR_H
+    
     rts
 
 ; Input routine using Monitor GETLN
@@ -1463,6 +1390,13 @@ PRDEC_TMP: .byte 0
 PRDEC_FLAG: .byte 0
 PRDEC_SAVEX: .byte 0
 TARGET_LINE: .byte 0
+    
+do_help:
+    lda #<msg_help
+    ldx #>msg_help
+    jsr puts
+    jmp command_loop
+
 do_buffer_status:
     ; 1. Print Dirty Status
     lda DIRTY_FLAG
@@ -1664,3 +1598,182 @@ msg_clean: .byte "NEW ", 0
 msg_slash: .byte "/", 0
 msg_lines_suffix: .byte "L ", 0
 msg_bytes_suffix: .byte "B", 0
+
+; Find Address of Line A (1-based)
+; Inputs: A = Line Number
+; Outputs: PTR = Address of start of line
+; Destroys: A, X, Y
+find_line_addr:
+    pha ; Save target line
+    
+    lda #<BUFFER_START
+    sta PTR_L
+    lda #>BUFFER_START
+    sta PTR_H
+    
+    pla
+    tax
+    dex         ; 0-indexed for loop (Line 1 = 0 offsets)
+    beq _fla_done
+    
+_fla_loop:
+    ldy #0
+_fla_scan:
+    lda (PTR_L), y
+    beq _fla_next
+    iny
+    bne _fla_scan
+_fla_next:
+    ; Point to next line (PTR + Y + 1)
+    tya
+    clc
+    adc #1
+    adc PTR_L
+    sta PTR_L
+    lda PTR_H
+    adc #0
+    sta PTR_H
+    
+    dex
+    bne _fla_loop
+    
+_fla_done:
+    rts
+
+; ==============================================================================
+; Generic Memory Move
+; Moves block [MEM_SRC, MEM_END) to MEM_DEST.
+; Handles overlap correctly (copy forward or backward).
+; Inputs: MEM_SRC, MEM_END, MEM_DEST (ZP Pointers)
+; Outputs: None (Memory moved)
+; Destroys: A, X, Y, MEM_SRC, MEM_DEST, MEM_END
+; ==============================================================================
+memmove:
+    ; Compare Dest vs Src
+    lda MEM_DEST_H
+    cmp MEM_SRC_H
+    bne _mm_check_dir
+    lda MEM_DEST_L
+    cmp MEM_SRC_L
+    bne _mm_check_dir
+    rts ; Dest == Src, nothing to do
+
+_mm_check_dir:
+    ; If Dest < Src, Copy Forward
+    ; If Dest > Src, Copy Backward
+    
+    lda MEM_DEST_H
+    cmp MEM_SRC_H
+    bcc _mm_copy_fwd
+    bne _mm_copy_bwd ; Dest > Src
+    
+    ; High bytes equal, check low
+    lda MEM_DEST_L
+    cmp MEM_SRC_L
+    bcc _mm_copy_fwd
+    
+_mm_copy_bwd:
+    ; --------------------------------------------------------------------------
+    ; BACKWARD COPY (Dest > Src)
+    ; Start at End-1, Copy to (Dest + Len) - 1
+    ; Actually, simpler:
+    ; Read from MEM_END-1 down to MEM_SRC
+    ; Write to (MEM_DEST + Len) - 1 down to MEM_DEST
+    
+    ; Just use pointers and predecrement.
+    ; But we need to know where to start writing.
+    ; WriteEnd = MEM_DEST + (MEM_END - MEM_SRC)
+    
+    ; Calc Length into X/Y (Low/High)
+    lda MEM_END_L
+    sec
+    sbc MEM_SRC_L
+    tax ; Len Low
+    lda MEM_END_H
+    sbc MEM_SRC_H
+    tay ; Len High
+    
+    ; Add Len to MEM_DEST to get MEM_DEST_END
+    txa
+    clc
+    adc MEM_DEST_L
+    sta MEM_DEST_L
+    tya
+    adc MEM_DEST_H
+    sta MEM_DEST_H
+    
+    ; Now MEM_DEST points to End of Dest Block (Exclusive)
+    ; MEM_END points to End of Source Block (Exclusive)
+    
+_mm_bwd_loop:
+    ; Check if done: MEM_END == MEM_SRC ?
+    lda MEM_END_L
+    cmp MEM_SRC_L
+    bne _mm_bwd_do
+    lda MEM_END_H
+    cmp MEM_SRC_H
+    beq _mm_done
+    
+_mm_bwd_do:
+    ; Pre-decrement Pointers
+    lda MEM_END_L
+    bne 1f
+    dec MEM_END_H
+1:  dec MEM_END_L
+    
+    lda MEM_DEST_L
+    bne 1f
+    dec MEM_DEST_H
+1:  dec MEM_DEST_L
+    
+    ; Copy Byte
+    ldy #0
+    lda (MEM_END_L), y
+    sta (MEM_DEST_L), y
+    jmp _mm_bwd_loop
+
+_mm_copy_fwd:
+    ; --------------------------------------------------------------------------
+    ; FORWARD COPY (Dest < Src)
+    ; Start at MEM_SRC, Copy to MEM_DEST, until MEM_SRC == MEM_END
+    
+_mm_fwd_loop:
+    ; Check if done
+    lda MEM_SRC_L
+    cmp MEM_END_L
+    bne _mm_fwd_do
+    lda MEM_SRC_H
+    cmp MEM_END_H
+    beq _mm_done
+    
+_mm_fwd_do:
+    ldy #0
+    lda (MEM_SRC_L), y
+    sta (MEM_DEST_L), y
+    
+    ; Increment Pointers
+    inc MEM_SRC_L
+    bne 1f
+    inc MEM_SRC_H
+1:
+    inc MEM_DEST_L
+    bne 1f
+    inc MEM_DEST_H
+1:
+    jmp _mm_fwd_loop
+
+_mm_done:
+    rts
+
+msg_help:
+    .byte "COMMANDS:", $0D
+    .byte " A       : APPEND LINES", $0D
+    .byte " P [N]   : PRINT LINES", $0D
+    .byte " D N     : DELETE LINE N", $0D
+    .byte " I N     : INSERT BEFORE LINE N", $0D
+    .byte " E N     : EDIT LINE N", $0D
+    .byte " F STR   : FIND STRING", $0D
+    .byte " B       : BUFFER STATUS", $0D
+    .byte " H       : CLEAR SCREEN", $0D
+    .byte " ?       : HELP", $0D
+    .byte " Q       : QUIT", $0D, 0

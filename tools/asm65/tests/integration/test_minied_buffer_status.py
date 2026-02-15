@@ -87,7 +87,7 @@ def generate_test_script(hex_lines):
             delay 1.0
             
             -- 4. Delete Line
-            type text "1D" & return
+            type text "D1" & return
             delay 0.5
             
             -- 5. Final Buffer Status (Dirty, 1 line)
