@@ -1,5 +1,4 @@
-from typing import List, Dict, Union
-from .ast import Program, Statement, Instruction, Directive, Label, Assignment, Unresolved, BinaryExpr
+from .ast import Program, Statement, Instruction, Directive, Label, Assignment, Unresolved, BinaryExpr, IfDef
 from .opcodes import OPCODES, OPCODES_6502, OPCODES_65C02
 from .bytes import ByteConverter
 from .symtab import SymbolTable
@@ -25,7 +24,6 @@ class Compiler:
     def compile(self, program: Program) -> bytearray:
         # Pass 1: Calculate addresses and define labels
         self.pass_num = 1
-        self.pc = 0
         self.pc = 0
         self.local_labels = {} # reset
         self.origin = 0 # reset
@@ -59,17 +57,32 @@ class Compiler:
                 else:
                     self.symbols.set(stmt.name, self.pc)
         elif isinstance(stmt, Assignment):
-            if self.pass_num == 1:
-                # Value must be resolvable in pass 1 for constants?
-                # Or we resolve expressions? 
-                # Ideally, assignments are processed immediately.
-                # Assuming simple int for now.
-                if isinstance(stmt.value, int):
-                    self.symbols.set(stmt.name, stmt.value)
+            # Resolve value immediately if possible
+            val = stmt.value
+            if isinstance(val, int):
+                 self.symbols.set(stmt.name, val)
+            else:
+                 # Try to resolve if expression
+                 resolved = self.resolve_expr(val)
+                 if resolved is not None:
+                      self.symbols.set(stmt.name, resolved)
         elif isinstance(stmt, Directive):
             self.visit_directive(stmt)
         elif isinstance(stmt, Instruction):
             self.visit_instruction(stmt)
+        elif isinstance(stmt, IfDef):
+            self.visit_ifdef(stmt)
+
+    def visit_ifdef(self, node: IfDef):
+        # Check if symbol is defined
+        is_defined = node.condition in self.symbols
+        
+        if is_defined:
+            for stmt in node.then_block:
+                self.visit_statement(stmt)
+        else:
+            for stmt in node.else_block:
+                self.visit_statement(stmt)
 
     def visit_directive(self, d: Directive):
         if d.name == '.org':

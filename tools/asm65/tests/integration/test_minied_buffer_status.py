@@ -102,10 +102,10 @@ def generate_test_script(hex_lines):
                 
                 -- Select All (Cmd+A)
                 tell application "System Events" to keystroke "a" using command down
-                delay 1.0
+                delay 1.5
                 -- Copy (Cmd+C)
                 tell application "System Events" to keystroke "c" using command down
-                delay 1.0
+                delay 2.0
                 
                 return the clipboard
             on error errMsg
@@ -136,6 +136,8 @@ def main():
     output = run_applescript(script)
     
     if output:
+        with open("/tmp/test_output.txt", "w") as f:
+            f.write(output)
         print("\\n--- Virtual ][ Screen Output ---")
         print(output)
         print("--------------------------------")
@@ -151,15 +153,15 @@ def main():
         # We can just check that all expected states appear in the output.
         
         # 1. Initial: Clean, 0 lines, 0 bytes used
-        if "NEW 0/200L" not in output:
+        if "NEW 0/1024L" not in output:
              failures.append("Missing initial Clean status")
         
         # 2. After Add: Dirty, 2 lines
-        if "UNSAVED 2/200L" not in output:
+        if "UNSAVED 2/1024L" not in output:
              failures.append("Missing Dirty status")
              
         # 3. After Delete: Dirty, 1 line
-        if "UNSAVED 1/200L" not in output:
+        if "UNSAVED 1/1024L" not in output:
              failures.append("Missing Line count 1 (after delete)")
              
         # Check Byte Counts (Approximate)

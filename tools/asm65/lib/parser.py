@@ -1,7 +1,7 @@
 from typing import List, Optional, Tuple, Union
 import os
 from .tokenizer import Tokenizer, Token, TokenType
-from .ast import Program, Statement, Instruction, Directive, Label, Assignment, Unresolved, BinaryExpr
+from .ast import Program, Statement, Instruction, Directive, Label, Assignment, Unresolved, BinaryExpr, IfDef
 from .string import str_compare
 
 class ParserError(Exception):
@@ -106,18 +106,14 @@ class Parser:
             tok = self.peektok()
             raise ParserError(f"Unknown token: {tok.lexeme if tok else 'EOF'}", tok)
 
-    def parse_directive(self, tok: Token) -> Optional[Directive]:
+    def parse_directive(self, tok: Token) -> Optional[Statement]:
         name = tok.lexeme
         args = []
         
         # Handle include (Same as before)
         if name in ['.include', '.inc']:
              arg = self.require(TokenType.STR, None)
-             # ... (existing include logic) ...
-             # For brevity, I'm just copying the structure changes.
-             # In real edit I need full body or careful splice.
-
-             # RE-Use existing include logic block
+             
              filename = arg.value
              self.require(TokenType.EOL)
              
@@ -146,6 +142,38 @@ class Parser:
              self.lex = new_lex
              
              return None
+
+        if name == '.ifdef':
+             cond_sym = self.require(TokenType.ID).lexeme
+             self.require(TokenType.EOL)
+             
+             then_block = []
+             else_block = []
+             current_block = then_block
+             
+             while True:
+                 # Check for end of block or else
+                 tok_peek = self.peektok()
+                 if tok_peek and tok_peek.type == TokenType.DIR:
+                      if tok_peek.lexeme == '.else':
+                           self.nexttok() # consume .else
+                           self.require(TokenType.EOL)
+                           current_block = else_block
+                           continue
+                      elif tok_peek.lexeme == '.endif':
+                           self.nexttok() # consume .endif
+                           self.require(TokenType.EOL)
+                           break
+                 
+                 # Check EOF
+                 if tok_peek is None or tok_peek.type == TokenType.EOF:
+                      raise ParserError("Unexpected EOF in .ifdef block", tok)
+                 
+                 stmt = self.parse_statement()
+                 if stmt:
+                     current_block.append(stmt)
+                     
+             return IfDef(cond_sym, then_block, else_block, line=tok.line)
 
         if name in ['.byte', '.word', '.fill']:
              args = self.parse_expr_list()

@@ -21,8 +21,10 @@ When working with Apple II assembly, avoid using Zero Page locations that are us
 - $EB-$EF (Monitor scratchpad)
 - $FA-$FF (Monitor scratchpad)
 
-## Virtual ][
+## Integration Testing with "Virtual ]["
 - When writing and executing integration tests, use Virtual ][ to load and run the assembly code. See https://www.virtualii.com/VirtualIIHelp/virtual_II_help.html
+- When pushing code for integration testing, you have to first rest the machine, then call -151 to enter the monitor, then load the program using the format "<address in hex>: <8 hex bytes>". For example, "0800: 48 65 6c 6c 6f 20 20 20".
+- Make sure you are in the monitor before loading the program. You know you are in the monitor by seeing the prompt "*".
 
 ## Project Structure Rules
 

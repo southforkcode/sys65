@@ -57,11 +57,22 @@ MEM_DEST_H = $0F
 MEM_END_L  = $10 ; New ZP variable for End of Source Block
 MEM_END_H  = $11
 
-BUFFER_START = $3000
-MAX_BUFFER_SIZE = $5000 ; 20KB limit (up to $8000)
-MAX_LINES = 200
+BUFFER_START = $4000
+MAX_BUFFER_SIZE = $4000 ; 16K
+
+.ifdef MEM_LIMIT_ARG
+    MEM_LIMIT = MEM_LIMIT_ARG
+.else
+    MEM_LIMIT = $8000 ; End of valid memory (BUFFER_START + MAX_BUFFER_SIZE)
+.endif
+
+.ifdef MAX_LINES_ARG
+    MAX_LINES = MAX_LINES_ARG
+.else
+    MAX_LINES = 1024 ; Increased to 1024
+.endif
 PROMPT = '>' + $80
-CMD_BUFFER = $2F00 ; Command line buffer
+CMD_BUFFER = $3F00 ; Command line buffer
 
 
 start:
@@ -73,6 +84,7 @@ start:
     
     lda #0
     sta LINE_IDX
+    sta LINE_IDX+1
     sta DIRTY_FLAG
 
     lda #<msg_welcome
@@ -140,9 +152,9 @@ cmd_table_end:
 cmd_impl:
     .word 0
 cmd_table:
-    .byte 'A'+$80, 'P'+$80, 'Q'+$80, 'H'+$80, 'E'+$80, 'D'+$80, 'I'+$80, 'F'+$80, 'B'+$80, '?'+$80, 0
+    .byte 'A'+$80, 'P'+$80, 'Q'+$80, 'H'+$80, 'E'+$80, 'D'+$80, 'I'+$80, 'F'+$80, 'B'+$80, '?'+$80, '*'+$80, 'N'+$80, 0
 cmd_impl_table:
-    .word do_append, do_print, do_quit, do_home, do_edit, do_delete, do_insert, do_find, do_buffer_status, do_help, 0
+    .word do_append, do_print, do_quit, do_home, do_edit, do_delete, do_insert, do_find, do_buffer_status, do_help, do_fill, do_new, 0
 
 do_quit:
     rts
@@ -151,18 +163,68 @@ do_home:
     jsr HOME
     jmp command_loop
 
+do_new:
+    ; Check if buffer is dirty
+    lda DIRTY_FLAG
+    beq _dn_clear   ; If 0, clean. Go straight to clear.
+
+    ; Confirmation
+    lda #<msg_confirm_new
+    ldx #>msg_confirm_new
+    jsr puts
+    jsr CROUT
+    
+    jsr get_line_monitor
+    
+    ldy #0
+    lda (PTR_L), y
+    cmp #'Y'+$80
+    bne _dn_cancel
+
+_dn_clear:
+    ; Reset Buffer
+    lda #<BUFFER_START
+    sta TEXT_PTR_L
+    lda #>BUFFER_START
+    sta TEXT_PTR_H
+    
+    lda #0
+    sta LINE_IDX
+    sta LINE_IDX+1
+    sta DIRTY_FLAG
+    
+    lda #<msg_cleared
+    ldx #>msg_cleared
+    jsr puts
+    jsr CROUT
+    jmp command_loop
+
+_dn_cancel:
+    jmp command_loop
+
 do_print:
     ; Parse optional arguments
     ; Y points to command char 'P' in CMD_BUFFER
     jsr parse_arg
-    bcs _dp_no_arg ; C set = No arg
-    
+    bcc _dp_has_arg ; C=0 -> Has Arg
+    beq _dp_no_arg  ; C=1, Z=1 -> No Arg
+    ; C=1, Z=0 -> Invalid Arg
+    jmp _dp_invalid_arg
+
+_dp_has_arg:
     sta TARGET_LINE
+    lda PD_VAL+1
+    sta TARGET_LINE+1
     jmp _dp_start
     
+_dp_invalid_arg:
+    jsr PRERR
+    jmp command_loop
+
 _dp_no_arg:
     lda #0
     sta TARGET_LINE
+    sta TARGET_LINE+1
 
 _dp_start:
     ; Print lines
@@ -173,17 +235,28 @@ _dp_start:
     
     lda #1
     sta CURRENT_LINE
+    sta CURRENT_LINE+1 ; Initialize High byte
     
-    ldx LINE_IDX
+    ; ldx LINE_IDX -> 16-bit check
+    lda LINE_IDX
+    ora LINE_IDX+1
     beq print_done
     
 print_line_loop:
     ; Check if we should print this line
     lda TARGET_LINE
+    ora TARGET_LINE+1
     beq _pl_do_print ; 0 = print all
-    cmp CURRENT_LINE
-    beq _pl_do_print
     
+    ; Compare TARGET_LINE vs CURRENT_LINE (16-bit)
+    lda TARGET_LINE
+    cmp CURRENT_LINE
+    bne _pl_check_next
+    lda TARGET_LINE+1
+    cmp CURRENT_LINE+1
+    beq _pl_do_print ; Equal
+    
+_pl_check_next:
     ; Skip this line
     ldy #0
 _pl_skip_scan:
@@ -194,10 +267,11 @@ _pl_skip_scan:
     
 _pl_do_print:
     lda CURRENT_LINE
-    jsr PRDEC
+    ldx CURRENT_LINE+1
+    jsr PRDEC16
     lda #' '+$80
     jsr COUT
-
+    
     ldy #0
 print_char_loop:
     lda (PTR_L), Y
@@ -220,8 +294,24 @@ _pl_next_line:
     sta PTR_H
     
     inc CURRENT_LINE
-    dex
-    bne print_line_loop
+    bne _pl_chk_bound
+    inc CURRENT_LINE+1
+    
+_pl_chk_bound:
+    ; Check if CURRENT_LINE > LINE_IDX
+    ; If CURRENT_LINE <= LINE_IDX, continue
+    
+    ; Compare CURRENT_LINE vs LINE_IDX
+    ; Compare CURRENT_LINE vs LINE_IDX
+    lda LINE_IDX+1
+    cmp CURRENT_LINE+1
+    bcc print_done ; LINE_IDX < CURRENT_LINE (High byte)
+    bne print_line_loop ; LINE_IDX > CURRENT_LINE (High byte)
+    
+    lda LINE_IDX
+    cmp CURRENT_LINE
+    bcc print_done ; LINE_IDX < CURRENT_LINE (Low byte)
+    jmp print_line_loop ; Continue
     
 print_done:
     jmp command_loop
@@ -229,7 +319,26 @@ print_done:
 do_append:
     ; Append lines to TEXT_PTR
 append_loop:
-    ; Copy TEXT_PTR to PTR for get_line
+    ; Check Max Lines
+    lda LINE_IDX+1
+    cmp #>MAX_LINES
+    bcc 1f ; OK
+    bne _da_lines_error_trampoline ; >
+    lda LINE_IDX
+    cmp #<MAX_LINES
+    bcc 1f ; OK
+    bcs _da_lines_error_trampoline ; >=
+    
+1:  ; Check Buffer Space (Simple check: is TEXT_PTR >= MEM_LIMIT?)
+    lda TEXT_PTR_H
+    cmp #>MEM_LIMIT
+    bcc 2f ; OK
+    bne _da_full_error_trampoline ; >
+    lda TEXT_PTR_L
+    cmp #<MEM_LIMIT
+    bcs _da_full_error_trampoline ; >=
+    
+2:  ; Copy TEXT_PTR to PTR for get_line
     lda TEXT_PTR_L
     sta PTR_L
     lda TEXT_PTR_H
@@ -280,6 +389,20 @@ found_null:
 stop_append:
     jmp command_loop
 
+_da_lines_error_trampoline:
+    lda #<msg_too_many_lines
+    ldx #>msg_too_many_lines
+    jsr puts
+    jsr CROUT
+    jmp command_loop
+
+_da_full_error_trampoline:
+    lda #<msg_buffer_full
+    ldx #>msg_buffer_full
+    jsr puts
+    jsr CROUT
+    jmp command_loop
+
 ; TODO: Refactor argument parsing.
 ; Many commands (Edit, Delete, Insert) share identical "Parse Number" logic.
 ; Extract to `parse_arg_or_default`.
@@ -289,14 +412,25 @@ do_edit:
     jsr parse_arg
     bcc 1f
     jmp _de_no_arg
-1:  sta TARGET_LINE
+1:  lda PD_VAL
+    sta TARGET_LINE
+    lda PD_VAL+1
+    sta TARGET_LINE+1
     
     ; Check if valid (1 <= TARGET <= LINE_IDX)
     lda TARGET_LINE
-    beq _de_jmp_invalid
-    cmp LINE_IDX
-    beq _de_valid_chk
-    bcs _de_jmp_invalid ; TARGET > LINE_IDX
+    ora TARGET_LINE+1
+    beq _de_jmp_invalid ; 0 is invalid
+    
+    ; Compare TARGET_LINE vs LINE_IDX
+    lda LINE_IDX+1
+    cmp TARGET_LINE+1
+    bcc _de_jmp_invalid ; LINE_IDX < TARGET (High)
+    bne _de_valid_chk   ; LINE_IDX > TARGET (High) -> Valid
+    
+    lda LINE_IDX
+    cmp TARGET_LINE
+    bcc _de_jmp_invalid ; LINE_IDX < TARGET (Low)
     jmp _de_valid_chk
 
 _de_jmp_invalid:
@@ -317,7 +451,8 @@ _de_valid_chk:
 _de_found_line:
     ; 3. Print current line
     lda TARGET_LINE
-    jsr PRDEC
+    ldx TARGET_LINE+1
+    jsr PRDEC16
     lda #':'+$80
     jsr COUT
     lda #' '+$80
@@ -442,6 +577,9 @@ _de_expand:
     sta SHIFT_SRC_H
     
     jsr shift_up
+    bcc 1f
+    jmp _de_full_error
+1:
     
 _de_copy:
     ; Copy CMD_BUFFER to EDIT_PTR
@@ -458,6 +596,16 @@ _de_done_copy:
     sta DIRTY_FLAG
     jmp command_loop
 
+_de_full_error:
+    lda #<msg_buffer_full
+    ldx #>msg_buffer_full
+    jsr puts
+    jsr CROUT
+    jmp command_loop
+    lda #1
+    sta DIRTY_FLAG
+    jmp command_loop
+
 _de_cancel:
     jmp command_loop
     
@@ -469,15 +617,26 @@ do_delete:
     jsr parse_arg
     bcc 1f
     jmp _dd_no_arg
-1:  sta TARGET_LINE
+1:  lda PD_VAL
+    sta TARGET_LINE
+    lda PD_VAL+1
+    sta TARGET_LINE+1
     
     ; Check if valid (1 <= TARGET <= LINE_IDX)
     lda TARGET_LINE
-    beq _dd_invalid
-    cmp LINE_IDX
-    beq _dd_valid_chk
-    bcs _dd_invalid ; TARGET > LINE_IDX
-
+    ora TARGET_LINE+1
+    beq _dd_invalid ; 0 is invalid
+    
+    ; Compare TARGET_LINE vs LINE_IDX
+    lda LINE_IDX+1
+    cmp TARGET_LINE+1
+    bcc _dd_invalid ; LINE_IDX < TARGET (High)
+    bne _dd_valid_chk ; LINE_IDX > TARGET (High)
+    
+    lda LINE_IDX
+    cmp TARGET_LINE
+    bcc _dd_invalid ; LINE_IDX < TARGET (Low)
+    
 _dd_valid_chk:
     ; 2. Find line address (store in SHIFT_DEST)
     lda TARGET_LINE
@@ -515,11 +674,21 @@ _dd_found_end:
     ; Check if we are deleting the last line
     lda TARGET_LINE
     cmp LINE_IDX
+    bne _dd_not_last
+    lda TARGET_LINE+1
+    cmp LINE_IDX+1
     beq _dd_last_line
     
+_dd_not_last:
     ; Not last line, shift everything down
     jsr shift_down
-    dec LINE_IDX
+    
+    ; dec 16-bit LINE_IDX
+    lda LINE_IDX
+    bne 1f
+    dec LINE_IDX+1
+1:  dec LINE_IDX
+    
     lda #1
     sta DIRTY_FLAG
     jmp command_loop
@@ -530,7 +699,12 @@ _dd_last_line:
     sta TEXT_PTR_L
     lda SHIFT_DEST_H
     sta TEXT_PTR_H
-    dec LINE_IDX
+    
+    ; dec 16-bit LINE_IDX
+    lda LINE_IDX
+    bne 1f
+    dec LINE_IDX+1
+1:  dec LINE_IDX
     lda #1
     sta DIRTY_FLAG
     jmp command_loop
@@ -582,6 +756,17 @@ _di_find_start_entry:
     jmp _di_input_loop
     
 _di_input_loop:
+    ; Check Max Lines
+    lda LINE_IDX+1
+    cmp #>MAX_LINES
+    bcc 1f ; OK
+    bne _di_lines_error_trampoline ; >
+    lda LINE_IDX
+    cmp #<MAX_LINES
+    bcc 1f ; OK
+    bcs _di_lines_error_trampoline ; >=
+    
+1:
     ; Prompt
     lda #':'+$80
     sta PROMPT_CHAR
@@ -633,6 +818,9 @@ _di_got_len:
     sta SHIFT_DEST_H
     
     jsr shift_up ; Moves rest of buffer up. Updates TEXT_PTR.
+    bcc 1f
+    jmp _di_full_error
+1:
     
     ; Copy CMD_BUFFER to memory at EDIT_PTR
     ldy #0
@@ -661,6 +849,9 @@ _di_done_copy:
     sta DIRTY_FLAG
     jmp _di_input_loop
 
+_di_lines_error_trampoline:
+    jmp _di_lines_error
+
 _di_reloop:
     jmp command_loop
 
@@ -668,6 +859,20 @@ _di_invalid:
 _di_no_arg:
     jsr PRERR
     jmp command_loop
+
+_di_full_error:
+    lda #<msg_buffer_full
+    ldx #>msg_buffer_full
+    jsr puts
+    jsr CROUT
+    jmp _di_reloop
+
+_di_lines_error:
+    lda #<msg_too_many_lines
+    ldx #>msg_too_many_lines
+    jsr puts
+    jsr CROUT
+    jmp _di_reloop
 
 _de_invalid:
 _de_no_arg:
@@ -724,6 +929,46 @@ shift_down:
 shift_up:
     ; Expand buffer.
     ; Copy backwards.
+    ; 1. Check if we have space
+    ; New End = TEXT_PTR + (SHIFT_DEST - SHIFT_SRC)
+    ; But wait, SHIFT_DEST - SHIFT_SRC is the *gap size*.
+    ; Yes. 
+    ; Size of gap = SHIFT_DEST - SHIFT_SRC
+    
+    ; Calculate Gap Size
+    lda SHIFT_DEST_L
+    sec
+    sbc SHIFT_SRC_L
+    sta TEMP_PTR_L ; Gap L
+    lda SHIFT_DEST_H
+    sbc SHIFT_SRC_H
+    sta TEMP_PTR_H ; Gap H
+    
+    ; Add Gap to TEXT_PTR to get New End
+    lda TEXT_PTR_L
+    clc
+    adc TEMP_PTR_L
+    sta TEMP_PTR_L
+    lda TEXT_PTR_H
+    adc TEMP_PTR_H
+    sta TEMP_PTR_H
+    
+    ; Check against MEM_LIMIT
+    lda TEMP_PTR_H
+    cmp #>MEM_LIMIT
+    bcc 2f ; OK if < High Byte
+    bne 1f ; Fail if > High Byte
+    ; If equal, check Low Byte
+    lda TEMP_PTR_L
+    cmp #<MEM_LIMIT
+    bcc 2f ; OK if < Low Byte
+    
+1:  ; Error: Buffer Full
+    sec ; Set Carry = Error
+    rts
+    
+2:  ; OK to proceed
+    
     ; 1. Setup MEM_END = TEXT_PTR
     lda TEXT_PTR_L
     sta MEM_END_L
@@ -871,40 +1116,124 @@ _prdec_do_ones:
     rts
 
 ; Parse decimal number starting at (PTR_L), Y
-; Returns value in A. Updates Y.
+; Returns value in PD_VAL (16-bit). Updates Y.
+; A is clobbered.
 PARSE_DECIMAL:
     lda #0
     sta PD_VAL
+    sta PD_VAL+1
 _pd_loop:
     lda (PTR_L),y
     cmp #'0'+$80
-    bcc _pd_done
-    cmp #'9'+$80+1
-    bcs _pd_done
+    bcs 1f
+    jmp _pd_done
+1:  cmp #'9'+$80+1
+    bcc 2f
+    jmp _pd_done
+2:
     
     ; Convert to int
     and #$0F
     pha ; Push digit
     
     ; Val = Val * 10
+    ; Val = (Val * 2) * 5? No, Val*10 = Val*8 + Val*2
+    
+    ; PD_TEMP = Val * 2
     lda PD_VAL
     asl a
     sta PD_TEMP
+    lda PD_VAL+1
+    rol a
+    sta PD_TEMP+1 ; PD_TEMP = Val * 2
+    
+    ; Val = Val * 4 (Accumulator has Val*2)
+    asl PD_TEMP
+    rol PD_TEMP+1
+    
+    ; Val = Val * 8
+    asl PD_TEMP
+    rol PD_TEMP+1 ; PD_TEMP = Val * 8
+    
+    ; Val = (Val * 8) + (Val * 2)
+    ; We need Val*2 again. Let's restart logic to be clearer.
+    ; Val * 10 = (Val << 3) + (Val << 1)
+    
+    ; Shift Left 1 (Val * 2)
+    lda PD_VAL
     asl a
+    sta PD_TEMP   ; PD_TEMP = Val * 2
+    lda PD_VAL+1
+    rol a
+    sta PD_TEMP+1
+    
+    ; Shift Left 2 more times (Val * 8)
+    asl a         ; Val * 4
+    rol PD_TEMP+1 ; Incorrect usage of rol? No, A has High byte
+    ; Let's operate on memory for simplicity or registers.
+    
+    ; PD_VAL * 2 -> stored in PD_TEMP
+    lda PD_VAL
     asl a
+    sta PD_TEMP
+    lda PD_VAL+1
+    rol a
+    sta PD_TEMP+1
+    
+    ; PD_VAL * 4
+    lda PD_TEMP
+    asl a
+    sta PD_TEMP2
+    lda PD_TEMP+1
+    rol a
+    sta PD_TEMP2+1
+    
+    ; PD_VAL * 8
+    lda PD_TEMP2
+    asl a
+    sta PD_TEMP2
+    lda PD_TEMP2+1
+    rol a
+    sta PD_TEMP2+1
+    
+    ; Val * 10 = (Val * 8) + (Val * 2)
+    lda PD_TEMP2   ; Val * 8
     clc
-    adc PD_TEMP
+    adc PD_TEMP    ; Val * 2
     sta PD_VAL
+    lda PD_TEMP2+1
+    adc PD_TEMP+1
+    sta PD_VAL+1
     
     pla ; Pop digit
     clc
     adc PD_VAL
     sta PD_VAL
+    lda PD_VAL+1
+    adc #0
+    sta PD_VAL+1
     
     iny
-    bne _pd_loop
+    beq 1f
+    jmp _pd_loop
+1:
 _pd_done:
-    lda PD_VAL
+    lda PD_VAL ; Return Low byte in A for compatibility (if needed, but consumers should check PD_VAL)
+    rts
+
+; Skip spaces in buffer pointed to by PTR
+; Inputs: PTR, Y
+; Outputs: Y points to first non-space or null
+;          A contains that char
+;          Z flag set if null (end of line)
+skip_spaces:
+    lda (PTR_L), y
+    beq _ss_done
+    cmp #' '+$80
+    bne _ss_done
+    iny
+    bne skip_spaces
+_ss_done:
     rts
 
 ; Parse optional decimal argument
@@ -916,42 +1245,47 @@ _pd_done:
 ;          C = Set if no argument found or invalid
 parse_arg:
     iny ; Skip command char or previous char
-_pa_skip_space:
-    lda (PTR_L), y
-    beq _pa_no_arg
-    cmp #' '+$80
-    bne _pa_check_arg
-    iny
-    bne _pa_skip_space
-
-_pa_check_arg:
+    jsr skip_spaces
+    
+    ; Check if we have a char
+    cmp #0
+    beq _pa_return_no_arg ; Z=1
+    
+    ; Check if digit
     cmp #'0'+$80
-    bcc _pa_no_arg
+    bcc _pa_return_invalid ; Z=0
     cmp #'9'+$80+1
-    bcs _pa_no_arg
+    bcs _pa_return_invalid ; Z=0
     
     jsr PARSE_DECIMAL
-    clc ; Success
+    clc ; Success (C=0)
     rts
 
+_pa_return_no_arg:
+    sec ; C=1
+    lda #0 ; Z=1
+    rts
+
+_pa_return_invalid:
+    sec ; C=1
+    lda #$FF ; Z=0
+    rts
+
+; Old labels for compatibility if any (unlikely used directly)
 _pa_no_arg:
-    sec ; Failure/No Arg
+    sec
     rts
 
 do_find:
     iny
-_df_skip_space:
-    lda (PTR_L), y
-    bne _df_chk_space
+    jsr skip_spaces
+    bne _df_got_arg ; Z=0 means A!=0 (found arg)
+    ; Z=1 means null (no arg)
     jsr PRERR
     jmp command_loop
 
 _df_chk_space:
-    cmp #' '+$80
-    bne _df_got_arg
-    iny
-    bne _df_skip_space
-    
+
 _df_got_arg:
     ldx #0
 _df_copy_pat:
@@ -978,6 +1312,8 @@ _df_init:
     
     lda #1
     sta FIND_LINE_NUM
+    lda #0
+    sta FIND_LINE_NUM+1
     
     lda #0
     sta FIND_PTR_PREV1
@@ -986,9 +1322,18 @@ _df_init:
     sta FIND_PTR_PREV2+1
     
 _df_loop:
+    ; Check if FIND_LINE_NUM <= LINE_IDX
+    lda LINE_IDX+1
+    cmp FIND_LINE_NUM+1
+    bcc _df_end_loop ; LINE_IDX < FIND (High) -> Stop
+    bne _df_check    ; LINE_IDX > FIND (High) -> Create
+    
     lda LINE_IDX
     cmp FIND_LINE_NUM
-    bcs _df_check
+    bcc _df_end_loop ; LINE_IDX < FIND (Low) -> Stop
+    jmp _df_check
+    
+_df_end_loop:
     jmp command_loop
     
 _df_check:
@@ -1063,7 +1408,9 @@ _df_found_null:
     sta FIND_PTR_CURR+1
     
     inc FIND_LINE_NUM
-    jmp _df_loop
+    bne 1f
+    inc FIND_LINE_NUM+1
+1:  jmp _df_loop
 
 _df_finish_jmp:
     jmp command_loop
@@ -1188,10 +1535,15 @@ print_context:
     sta PTR_L
     lda FIND_PTR_PREV2+1
     sta PTR_H
+    
+    ; Calc FIND_LINE_NUM - 2
     lda FIND_LINE_NUM
     sec
     sbc #2
-    jsr print_line_at_ptr
+    ldx FIND_LINE_NUM+1
+    bcs 1f
+    dex
+1:  jsr print_line_at_ptr
     
 _pc_prev1:
     lda FIND_PTR_PREV1+1
@@ -1201,10 +1553,15 @@ _pc_prev1:
     sta PTR_L
     lda FIND_PTR_PREV1+1
     sta PTR_H
+    
+    ; Calc FIND_LINE_NUM - 1
     lda FIND_LINE_NUM
     sec
     sbc #1
-    jsr print_line_at_ptr
+    ldx FIND_LINE_NUM+1
+    bcs 1f
+    dex
+1:  jsr print_line_at_ptr
 
 _pc_curr:
     lda FIND_PTR_CURR
@@ -1213,6 +1570,10 @@ _pc_curr:
     lda FIND_PTR_CURR+1
     sta PTR_H
     sta TEMP_PTR_H
+
+    lda FIND_LINE_NUM
+    ldx FIND_LINE_NUM+1
+    jsr print_line_at_ptr
     
     lda FIND_LINE_NUM
     jsr print_line_highlighted
@@ -1289,7 +1650,21 @@ _pc_at_end:
     rts
 
 print_line_at_ptr:
-    jsr PRDEC
+    ; Print Line Number (A, X) - but wait, where is the line number coming from?
+    ; It seems FIND_LINE_NUM is passed implicitly or loaded?
+    ; Original code: lda FIND_LINE_NUM; jsr print_line_at_ptr? No.
+    ; print_context calls it.
+    ; Wait, print_context:
+    ; lda FIND_LINE_NUM
+    ; sec
+    ; sbc #2
+    ; jsr print_line_at_ptr
+    
+    ; So print_line_at_ptr expects Line Number in A?
+    ; If 16-bit, it needs A and X.
+    
+    ; let's update print_line_at_ptr to assume A(Low), X(High)
+    jsr PRDEC16
     lda #':'+$80
     jsr COUT
     lda #' '+$80
@@ -1341,6 +1716,11 @@ msg_next:
 
 msg_welcome:
     .byte "MINIED 1.1", $0d, 0
+
+msg_buffer_full:
+    .byte "Error: Buffer Full", $0d, 0
+msg_too_many_lines:
+    .byte "Error: Too Many Lines", $0d, 0
     
 LINE_IDX:
     .byte 0
@@ -1372,12 +1752,14 @@ _dbs_print_dirty:
     
     ; 2. Print Lines
     lda LINE_IDX
-    jsr PRDEC
+    ldx LINE_IDX+1
+    jsr PRDEC16
     lda #<msg_slash
     ldx #>msg_slash
     jsr puts
-    lda #MAX_LINES
-    jsr PRDEC
+    lda #<MAX_LINES
+    ldx #>MAX_LINES
+    jsr PRDEC16
     
     lda #<msg_lines_suffix
     ldx #>msg_lines_suffix
@@ -1531,8 +1913,9 @@ _pd16_chk_1:
     
     rts
 
-PD_VAL: .byte 0
-PD_TEMP: .byte 0
+PD_VAL: .word 0
+PD_TEMP: .word 0
+PD_TEMP2: .word 0
     
 OLD_LEN_VAR: .byte 0
 NEW_LEN_VAR: .byte 0
@@ -1544,7 +1927,7 @@ SHIFT_DIFF_L: .byte 0
 FIND_PTR_CURR: .word 0
 FIND_PTR_PREV1: .word 0
 FIND_PTR_PREV2: .word 0
-FIND_LINE_NUM: .byte 0
+FIND_LINE_NUM: .word 0 ; 16-bit
 DIRTY_FLAG: .byte 0
 BS_USED_L: .byte 0
 BS_USED_H: .byte 0
@@ -1555,12 +1938,136 @@ PRDEC16_VAL_H: .byte 0
 
 msg_dirty: .byte "UNSAVED ", 0
 msg_clean: .byte "NEW ", 0
+msg_lorem: .byte "LOREM IPSUM LINE", 0
+msg_fill_done: .byte "FILL DONE", 0
+msg_confirm_new: .byte "CLEAR BUFFER (Y/N)?", 0
+msg_cleared: .byte "BUFFER CLEARED", 0
 msg_slash: .byte "/", 0
 msg_lines_suffix: .byte "L ", 0
 msg_bytes_suffix: .byte "B", 0
 
 ; Find Address of Line A (1-based)
 ; Inputs: A = Line Number
+do_fill:
+    ; Fill buffer with N lines of dummy text.
+    ; Syntax: * N
+    
+    jsr parse_arg
+    bcc _dfill_has_arg
+    ; If no arg, default to 10
+    lda #10
+    sta PD_VAL
+    lda #0
+    sta PD_VAL+1
+    
+_dfill_has_arg:
+    ; PD_VAL has count.
+    ; Store in TARGET_LINE as loop counter
+    lda PD_VAL
+    sta TARGET_LINE
+    lda PD_VAL+1
+    sta TARGET_LINE+1
+    
+_dfill_loop:
+    ; Check if counter is 0
+    lda TARGET_LINE
+    ora TARGET_LINE+1
+    beq _dfill_done
+    
+    ; 1. Check Max Lines
+    lda LINE_IDX+1
+    cmp #>MAX_LINES
+    bcc 1f
+    bne _dfill_err_lines
+    lda LINE_IDX
+    cmp #<MAX_LINES
+    bcc 1f
+    bcs _dfill_err_lines
+1:
+    ; 2. Check Buffer Space
+    ; Assume dummy line length = ~16 bytes.
+    ; Check if TEXT_PTR + 17 < MEM_LIMIT
+    lda TEXT_PTR_L
+    clc
+    adc #17
+    sta EDIT_PTR_L ; Use EDIT_PTR as temp
+    lda TEXT_PTR_H
+    adc #0
+    sta EDIT_PTR_H
+    
+    lda EDIT_PTR_H
+    cmp #>MEM_LIMIT
+    bcc 2f
+    bne _dfill_err_buf
+    lda EDIT_PTR_L
+    cmp #<MEM_LIMIT
+    bcs _dfill_err_buf
+2:
+    
+    ; 3. Append Line
+    ; Copy "LOREM IPSUM LINE" + null
+    ldy #0
+    ldx #0
+_dfill_copy:
+    lda msg_lorem,x
+    beq _dfill_term
+    sta (TEXT_PTR_L),y
+    inx
+    iny
+    bne _dfill_copy
+_dfill_term:
+    ; Null terminate
+    lda #0
+    sta (TEXT_PTR_L),y
+    
+    ; Update TEXT_PTR
+    tya
+    clc
+    adc #1
+    adc TEXT_PTR_L
+    sta TEXT_PTR_L
+    lda TEXT_PTR_H
+    adc #0
+    sta TEXT_PTR_H
+    
+    ; Update Counters
+    inc LINE_IDX
+    bne 3f
+    inc LINE_IDX+1
+3:
+    ; Decrement Loop Counter (TARGET_LINE)
+    lda TARGET_LINE
+    bne 4f
+    dec TARGET_LINE+1
+4:  dec TARGET_LINE
+    
+    jmp _dfill_loop
+
+_dfill_done:
+    lda #1
+    sta DIRTY_FLAG
+    lda #<msg_fill_done
+    ldx #>msg_fill_done
+    jsr puts
+    jsr CROUT
+    jmp command_loop
+
+_dfill_err_lines:
+    jsr PRERR
+    lda #<msg_too_many_lines
+    ldx #>msg_too_many_lines
+    jsr puts
+    jsr CROUT
+    jmp command_loop
+
+_dfill_err_buf:
+    jsr PRERR
+    lda #<msg_buffer_full
+    ldx #>msg_buffer_full
+    jsr puts
+    jsr CROUT
+    jmp command_loop
+
 ; Outputs: PTR = Address of start of line
 ; Destroys: A, X, Y
 find_line_addr:

@@ -50,3 +50,10 @@ class BinaryExpr(Node):
     left: Union[int, str, Unresolved, 'BinaryExpr']
     op: str
     right: Union[int, str, Unresolved, 'BinaryExpr']
+
+@dataclass
+class IfDef(Statement):
+    condition: str
+    then_block: List[Statement]
+    else_block: List[Statement]
+    line: int = 0

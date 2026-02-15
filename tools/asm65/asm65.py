@@ -26,10 +26,26 @@ if __name__ == "__main__":
   parser.add_argument("input_files", nargs="+", help="Input assembly files")
   parser.add_argument("output_file", help="Output binary file")
   parser.add_argument("-f", "--format", choices=["bin", "hex"], default="bin", help="Output format (bin is default)")
+  parser.add_argument("-D", "--define", action="append", help="Define symbol (e.g. -DDEBUG or -DMAX_LINES=10)")
   
   args = parser.parse_args()
 
   asm = Assembler()
+  
+  # Inject definitions
+  if args.define:
+      for define in args.define:
+          parts = define.split('=')
+          name = parts[0]
+          val = 1
+          if len(parts) > 1:
+              try:
+                  val = int(parts[1], 0) # Handle 0x prefix
+              except ValueError:
+                  print(f"Invalid value for definition {name}: {parts[1]}")
+                  sys.exit(1)
+          asm.symbols.set(name, val)
+
   for input_file in args.input_files:
     if not os.path.exists(input_file):
       print(f"Error: {input_file} does not exist")
