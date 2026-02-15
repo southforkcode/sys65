@@ -1,3 +1,45 @@
+; ==============================================================================
+; MiniEd - A Simple Line Editor for Apple II
+; ==============================================================================
+;
+; MEMORY LAYOUT & BUFFER STRUCTURE:
+; ---------------------------------
+; The text buffer is a linear sequence of 0-terminated ASCII strings.
+;
+; [Start: $3000] -> "Line 1\0" "Line 2\0" ... "Line N\0" [End: TEXT_PTR]
+;
+; - BUFFER_START ($3000): Fixed start of the buffer.
+; - TEXT_PTR ($08/$09): Points to the byte *after* the last 0-terminator.
+;                       Free space begins here.
+; - LINE_IDX: Contains the current number of lines in the buffer.
+; - MAX_BUFFER_SIZE: Hard limit on buffer size ($5000 bytes).
+; - MAX_LINES: Hard limit on line count (200).
+;
+; KEY ROUTINES:
+; -------------
+; - command_loop: Main input loop. Parses single-character commands.
+; - get_line_monitor: Wraps Monitor GETLN to read input into internal buffer.
+; - puts / puts_inv: Prints 0-terminated strings (Standard / Inverse).
+; - shift_up: Shifts buffer content UP (to higher addr) to create a gap.
+; - shift_down:
+    ; Shift content DOWN (to lower addresses)
+    ; Used by delete operations.
+    ; Reads from SHIFT_SRC, Writes to SHIFT_DEST
+    ; TODO: Generic memmove(src, dest, length) - handle overlap check.
+;
+; TODO REFACTORING IDEAS:
+; -----------------------
+; 1. Line Finding Logic: The logic to traverse the buffer to find a specific
+;    line number is duplicated in `do_edit`, `do_delete`, `do_insert`, etc.
+;    Refactor into a `find_line_addr` routine that accepts a line number in A
+;    and returns the address in a ZP pointer.
+;
+; 2. Memory Moves: `shift_up` and `shift_down` are specific to global pointers.
+;    Make them generic `memmove` routines.
+;
+; 3. Argument Parsing: Commands parse decimal headers manually. Consolidate.
+; ==============================================================================
+
 .org $2000
 
 ; Include Apple II definitions
@@ -22,6 +64,7 @@ SHIFT_DEST_L = $0E
 SHIFT_DEST_H = $0F
 
 BUFFER_START = $3000
+MAX_BUFFER_SIZE = $5000 ; 20KB limit (up to $8000)
 MAX_LINES = 200
 PROMPT = '>' + $80
 CMD_BUFFER = $2F00 ; Command line buffer
@@ -36,6 +79,7 @@ start:
     
     lda #0
     sta LINE_IDX
+    sta DIRTY_FLAG
 
     lda #<msg_welcome
     ldx #>msg_welcome
@@ -95,9 +139,9 @@ cmd_table_end:
 cmd_impl:
     .word 0
 cmd_table:
-    .byte 'A'+$80, 'P'+$80, 'Q'+$80, 'H'+$80, 'E'+$80, 'D'+$80, 'I'+$80, 'F'+$80, 0
+    .byte 'A'+$80, 'P'+$80, 'Q'+$80, 'H'+$80, 'E'+$80, 'D'+$80, 'I'+$80, 'F'+$80, 'B'+$80, 0
 cmd_impl_table:
-    .word do_append, do_print, do_quit, do_home, do_edit, do_delete, do_insert, do_find, 0
+    .word do_append, do_print, do_quit, do_home, do_edit, do_delete, do_insert, do_find, do_buffer_status, 0
 
 do_quit:
     rts
@@ -109,6 +153,7 @@ do_home:
 do_print:
     ; Parse optional arguments
     ; Y points to command char 'P' in CMD_BUFFER
+    ; TODO: Refactor argument parsing (Duplicate logic in do_edit/do_delete)
     iny
     
 _dp_skip_space:
@@ -243,10 +288,16 @@ found_null:
     sta TEXT_PTR_H
     
     inc LINE_IDX
+    lda #1
+    sta DIRTY_FLAG
     jmp append_loop
 
 stop_append:
     jmp command_loop
+
+; TODO: Refactor argument parsing.
+; Many commands (Edit, Delete, Insert) share identical "Parse Number" logic.
+; Extract to `parse_arg_or_default`.
 
 do_edit:
     ; 1. Parse argument
@@ -285,6 +336,9 @@ _de_jmp_invalid:
 _de_valid_chk:
     
     ; 2. Find line address
+    ; TODO: Refactor Line Finding.
+    ; This loop structure is repeated in do_delete and do_insert.
+    ; extract to `find_line_address(A=LineNum) -> Returns (PTR)`.
     lda #<BUFFER_START
     sta EDIT_PTR_L
     lda #>BUFFER_START
@@ -453,17 +507,22 @@ _de_copy_loop:
     bne _de_copy_loop
     
 _de_done_copy:
+    lda #1
+    sta DIRTY_FLAG
     jmp command_loop
 
 _de_cancel:
     jmp command_loop
+    
+_dd_jmp_no_arg:
+    jmp _dd_no_arg
 
 do_delete:
     ; 1. Parse argument
     iny
 _dd_skip_space:
     lda (PTR_L), y
-    beq _dd_no_arg
+    beq _dd_jmp_no_arg
     cmp #' '+$80
     bne _dd_check_arg
     iny
@@ -546,6 +605,8 @@ _dd_found_end:
     ; Not last line, shift everything down
     jsr shift_down
     dec LINE_IDX
+    lda #1
+    sta DIRTY_FLAG
     jmp command_loop
 
 _dd_last_line:
@@ -555,6 +616,8 @@ _dd_last_line:
     lda SHIFT_DEST_H
     sta TEXT_PTR_H
     dec LINE_IDX
+    lda #1
+    sta DIRTY_FLAG
     jmp command_loop
 
 _dd_invalid:
@@ -700,26 +763,6 @@ _di_got_len:
     
     ; Copy CMD_BUFFER to memory at EDIT_PTR
     ldy #0
-_di_copy:
-    lda CMD_BUFFER, y
-    sta (EDIT_PTR_L), y
-    beq _di_done_copy
-    iny
-    bne _di_copy
-    
-_di_done_copy:
-    ; Update EDIT_PTR to point to start of next line (which is SHIFT_DEST from before)
-    ; Since shift_up destroys SHIFT_DEST, recompute:
-    lda NEW_LEN_VAR
-    clc
-    adc #1
-    adc EDIT_PTR_L
-    sta EDIT_PTR_L
-    lda EDIT_PTR_H
-    adc #0
-    sta EDIT_PTR_H
-    
-    jmp _di_reloop
 
 _di_copy:
     lda CMD_BUFFER, y
@@ -741,6 +784,8 @@ _di_done_copy:
     sta EDIT_PTR_H
     
     inc LINE_IDX
+    lda #1
+    sta DIRTY_FLAG
     jmp _di_input_loop
 
 _di_reloop:
@@ -817,6 +862,9 @@ shift_up:
     ; shift_up now needs to read from TEXT_PTR (going backwards) 
     ; and write to SHIFT_DEST (going backwards)
     ; until TEXT_PTR reaches SHIFT_SRC.
+    ; available at SHIFT_SRC.
+    ;
+    ; TODO: Make generic memmove(src, dest, length)
     
 _su_loop:
     ; Check if Read Pointer (TEXT_PTR) == SHIFT_SRC
@@ -892,6 +940,24 @@ puts_loop:
     iny
     bne puts_loop
 puts_done:
+    rts
+
+; Print string in A (Low), X (High) using Inverse Video
+; Preserves A and X when calling SETINV, but destroys them after puts returns.
+puts_inv:
+    pha             ; Save A (PTR_L)
+    txa
+    pha             ; Save X (PTR_H)
+    
+    jsr SETINV      ; Set Inverse Video Flag ($3F)
+    
+    pla
+    tax             ; Restore X
+    pla             ; Restore A
+    
+    jsr puts        ; Print the string
+    
+    jsr SETNORM     ; Restore Normal Video Flag ($FF)
     rts
 
 ; Print A as decimal number (0-255) to COUT
@@ -1397,6 +1463,180 @@ PRDEC_TMP: .byte 0
 PRDEC_FLAG: .byte 0
 PRDEC_SAVEX: .byte 0
 TARGET_LINE: .byte 0
+do_buffer_status:
+    ; 1. Print Dirty Status
+    lda DIRTY_FLAG
+    beq _dbs_clean
+    lda #<msg_dirty
+    ldx #>msg_dirty
+    jmp _dbs_print_dirty
+_dbs_clean:
+    lda #<msg_clean
+    ldx #>msg_clean
+_dbs_print_dirty:
+    jsr puts_inv
+    
+    ; 2. Print Lines
+    lda LINE_IDX
+    jsr PRDEC
+    lda #<msg_slash
+    ldx #>msg_slash
+    jsr puts
+    lda #MAX_LINES
+    jsr PRDEC
+    
+    lda #<msg_lines_suffix
+    ldx #>msg_lines_suffix
+    jsr puts
+    
+    ; 3. Print Bytes
+    ; Calc Bytes Used (TEXT_PTR - BUFFER_START)
+    lda TEXT_PTR_L
+    sec
+    sbc #<BUFFER_START
+    sta BS_USED_L
+    lda TEXT_PTR_H
+    sbc #>BUFFER_START
+    sta BS_USED_H
+    
+    lda BS_USED_L
+    ldx BS_USED_H
+    jsr PRDEC16
+    
+    lda #<msg_slash
+    ldx #>msg_slash
+    jsr puts
+    
+    lda #<MAX_BUFFER_SIZE
+    ldx #>MAX_BUFFER_SIZE
+    jsr PRDEC16
+    
+    lda #<msg_bytes_suffix
+    ldx #>msg_bytes_suffix
+    jsr puts
+    
+    jsr CROUT
+    
+    jmp command_loop
+
+; Print 16-bit number in X (High), A (Low)
+PRDEC16:
+    sta PRDEC16_VAL_L
+    stx PRDEC16_VAL_H
+    
+    ; Simple repeated subtraction for 10000, 1000, 100, 10
+    ; Or just a basic conversion loop.
+    ; Since we don't have a divide, subtraction is easiest.
+    
+    lda #0
+    sta PRDEC_FLAG ; Use to suppress leading zeros
+    
+    ; 10000s
+    ldy #0
+_pd16_10000:
+    lda PRDEC16_VAL_L
+    sec
+    sbc #<10000
+    tax
+    lda PRDEC16_VAL_H
+    sbc #>10000
+    bcc _pd16_10000_done
+    sta PRDEC16_VAL_H
+    stx PRDEC16_VAL_L
+    iny
+    jmp _pd16_10000
+_pd16_10000_done:
+    tya
+    beq _pd16_chk_1000
+    ora #$B0
+    jsr COUT
+    inc PRDEC_FLAG
+    
+_pd16_chk_1000:
+    ; 1000s
+    ldy #0
+_pd16_1000:
+    lda PRDEC16_VAL_L
+    sec
+    sbc #<1000
+    tax
+    lda PRDEC16_VAL_H
+    sbc #>1000
+    bcc _pd16_1000_done
+    sta PRDEC16_VAL_H
+    stx PRDEC16_VAL_L
+    iny
+    jmp _pd16_1000
+_pd16_1000_done:
+    tya
+    bne _pd16_print_1000
+    lda PRDEC_FLAG
+    beq _pd16_chk_100
+_pd16_print_1000:
+    tya
+    ora #$B0
+    jsr COUT
+    inc PRDEC_FLAG
+
+_pd16_chk_100:
+    ; 100s
+    ldy #0
+_pd16_100:
+    lda PRDEC16_VAL_L
+    sec
+    sbc #100
+    tax
+    lda PRDEC16_VAL_H
+    sbc #0
+    bcc _pd16_100_done
+    sta PRDEC16_VAL_H
+    stx PRDEC16_VAL_L
+    iny
+    jmp _pd16_100
+_pd16_100_done:
+    tya
+    bne _pd16_print_100
+    lda PRDEC_FLAG
+    beq _pd16_chk_10
+_pd16_print_100:
+    tya
+    ora #$B0
+    jsr COUT
+    inc PRDEC_FLAG
+
+_pd16_chk_10:
+    ; 10s
+    ldy #0
+_pd16_10:
+    lda PRDEC16_VAL_L
+    sec
+    sbc #10
+    tax
+    lda PRDEC16_VAL_H
+    sbc #0 ; High byte of 10 is 0
+    bcc _pd16_10_done
+    sta PRDEC16_VAL_H
+    stx PRDEC16_VAL_L
+    iny
+    jmp _pd16_10
+_pd16_10_done:
+    tya
+    bne _pd16_print_10
+    lda PRDEC_FLAG
+    beq _pd16_chk_1
+_pd16_print_10:
+    tya
+    ora #$B0
+    jsr COUT
+
+_pd16_chk_1:
+    ; Ones
+    lda PRDEC16_VAL_L
+    ora #$B0
+    jsr COUT
+    
+    rts
+
 PD_VAL: .byte 0
 PD_TEMP: .byte 0
     
@@ -1411,3 +1651,16 @@ FIND_PTR_CURR: .word 0
 FIND_PTR_PREV1: .word 0
 FIND_PTR_PREV2: .word 0
 FIND_LINE_NUM: .byte 0
+DIRTY_FLAG: .byte 0
+BS_USED_L: .byte 0
+BS_USED_H: .byte 0
+BS_REM_L:  .byte 0
+BS_REM_H:  .byte 0
+PRDEC16_VAL_L: .byte 0
+PRDEC16_VAL_H: .byte 0
+
+msg_dirty: .byte "UNSAVED ", 0
+msg_clean: .byte "NEW ", 0
+msg_slash: .byte "/", 0
+msg_lines_suffix: .byte "L ", 0
+msg_bytes_suffix: .byte "B", 0

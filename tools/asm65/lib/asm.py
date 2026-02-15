@@ -78,7 +78,7 @@ class Assembler:
     self.compiler.compile(program)
     # self._bytes = self.compiler.bytes # Virtual property handles this
 
-  def parse_expr(self, required_type: type = None) -> int | str | Unresolved | None:
+  def parse_expr(self, required_type: type = None) -> 'int | str | Unresolved | None':
     if tok := self.expect(TokenType.OP, "<"):
       # low byte
       expr = self.parse_expr(required_type = int)

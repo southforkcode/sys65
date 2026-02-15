@@ -14,7 +14,7 @@ class TokenType(Enum):
   LOCAL_LABEL_REF = 8
 
 class Token:
-  def __init__(self, type: TokenType, lexeme: str, value: str|int|None, line: int):
+  def __init__(self, type: TokenType, lexeme: str, value: 'str|int|None', line: int):
     self.type = type
     self.lexeme = lexeme
     self.value = value

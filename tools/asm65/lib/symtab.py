@@ -1,5 +1,7 @@
 
 
+from typing import Union
+
 class SymbolTable:
   def __init__(self):
     self.symbols : dict[str, int] = {}
@@ -18,13 +20,13 @@ class SymbolTable:
       raise ValueError(f"Symbol '{name}' not defined")
     self.symbols[name] = value
 
-  def set(self, name: str, value: int | None):
+  def set(self, name: str, value: Union[int, None]):
     self.symbols[name] = value
 
-  def get(self, name: str) -> int | None:
+  def get(self, name: str) -> Union[int, None]:
     return self.symbols.get(name)
 
-  def __getitem__(self, name: str) -> int | None:
+  def __getitem__(self, name: str) -> Union[int, None]:
     return self.get(name)
 
   def __contains__(self, name: str) -> bool:
