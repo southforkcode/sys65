@@ -1,5 +1,6 @@
 ; A simple test program
 .org $1000
+COUT = $FDF0
 
 start:
   lda #<message

@@ -30,7 +30,10 @@ if __name__ == "__main__":
   
   args = parser.parse_args()
 
-  asm = Assembler()
+  script_dir = os.path.dirname(os.path.abspath(__file__))
+  global_include = os.path.join(script_dir, "include")
+  
+  asm = Assembler(include_paths=[global_include])
   
   # Inject definitions
   if args.define:
@@ -53,8 +56,18 @@ if __name__ == "__main__":
 
     with open(input_file, "r") as f:
       print(f"Assembling {input_file}")
-      asm.assemble_stream(f, input_file)
-      asm.parse()
+      try:
+          asm.assemble_stream(f, input_file)
+          asm.parse()
+      except Exception as e:
+          # Check for our known errors
+          # We import them locally to avoid top-level import issues or just use name check
+          name = type(e).__name__
+          if name in ['AssemblyError', 'CompilerError', 'ParserError']:
+              print(f"Error: {e}", file=sys.stderr)
+              sys.exit(1)
+          else:
+              raise
 
   # dump symbol table to stdout (optional, maybe suppress?)
   # Keeping it as is helpful for debugging

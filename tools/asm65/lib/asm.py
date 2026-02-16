@@ -14,6 +14,15 @@ class AssemblyError(Exception):
     self.msg = msg
     self.token = token
 
+  def __str__(self):
+      loc = ""
+      if self.token:
+          if self.token.filename:
+              loc += f"{self.token.filename}:"
+          if self.token.line:
+              loc += f"{self.token.line}: "
+      return f"{loc}{self.msg}"
+
 class Unresolved:
   def __init__(self, name: str, type: str):
     self.name = name
@@ -23,9 +32,10 @@ class Unresolved:
     return f"Unresolved({self.name}, {self.type})"
 
 class Assembler:
-  def __init__(self):
+  def __init__(self, include_paths=None):
     self.lex = None
     self.compiler = Compiler()
+    self.include_paths = include_paths or []
     self._bytes = []
     
     # Legacy properties for compatibility
@@ -72,7 +82,7 @@ class Assembler:
   def parse(self):
     from .parser import Parser
     
-    parser = Parser(self.lex)
+    parser = Parser(self.lex, self.include_paths)
     program = parser.parse_program()
     
     self.compiler.compile(program)

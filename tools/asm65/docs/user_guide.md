@@ -130,6 +130,7 @@ When in "65c02" mode, additional instructions (like `bra`, `phx`, `phy`, etc.) a
 .cpu "65c02"
 ```
 
+
 ### .align
 Aligns the current program counter to the next multiple of the specified value.
 This is useful for aligning data or code to page boundaries or other specific alignments.
@@ -138,6 +139,47 @@ It fills the gap with zeros.
 ```asm
 .align 256 ; Align to next page boundary
 ```
+
+### .enum / .end
+Defines an enumeration of values, with optional auto-incrementing. 
+
+**Syntax:**
+```asm
+.enum [Name] [: Type]
+    Member [= Value]
+    ...
+.end
+```
+
+- **Name**: Optional. If provided, members can be accessed as `Name.Member`.
+- **Type**: Optional. `: byte` (default) or `: word`. Currently for documentation; auto-increment is always +1.
+- **Member**: The name of the enum member.
+- **Value**: Optional explicit value. If omitted, the value is the previous member's value + 1 (starting at 0).
+
+**Example:**
+
+```asm
+; Named enum
+.enum COLORS
+    RED = 1
+    GREEN      ; 2
+    BLUE       ; 3
+.end
+
+; Unnamed enum
+.enum
+    READ  = 1
+    WRITE      ; 2
+.end
+
+lda #COLORS.RED
+lda #READ
+```
+
+**Accessing Enum Members:**
+- **Named Enums**: Members are added to the symbol table as `EnumName.MemberName`.
+- **Unnamed Enums**: Members are added directly to the symbol table as `MemberName`.
+
 
 ### .include / .inc
 Includes another source file at the current position. The path is relative to the current file.

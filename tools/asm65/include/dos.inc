@@ -1,0 +1,34 @@
+; Apple DOS 3.3 Standard Definitions
+
+RWTS    = $03D9  ; Read/Write Track/Sector entry point
+LOCRPL  = $03E3  ; Locate RWTS Parameter List
+
+; DOS Zero Page usage
+DOS_ZP_PTR = $3E
+DOS_ZP_LEN = $40
+
+; Common File Types
+FT_TEXT = $00
+FT_INT  = $01
+FT_APPL = $02
+FT_BIN  = $04
+FT_S    = $08
+FT_REL  = $10
+FT_A    = $20
+FT_B    = $40
+
+; DOS Error Codes
+ERR_FILE_NOT_FOUND = $06
+ERR_VOLUME_MISMATCH = $08
+ERR_DISK_FULL = $09
+ERR_FILE_LOCKED = $0A
+ERR_SYNTAX_ERROR = $0B
+ERR_NO_BUFFERS = $0D
+ERR_FILE_TYPE_MISMATCH = $0D
+ERR_PROGRAM_TOO_LARGE = $0E
+ERR_NOT_DIRECT_COMMAND = $0F
+
+; DOS Hooks
+DOS_WARM_START = $03D0
+DOS_COLD_START = $03D3
+DOS_FILE_MGR   = $03D6

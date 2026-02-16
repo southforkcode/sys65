@@ -1,7 +1,7 @@
 from typing import List, Optional, Tuple, Union
 import os
 from .tokenizer import Tokenizer, Token, TokenType
-from .ast import Program, Statement, Instruction, Directive, Label, Assignment, Unresolved, BinaryExpr, IfDef
+from .ast import Program, Statement, Instruction, Directive, Label, Assignment, Unresolved, BinaryExpr, IfDef, EnumDef
 from .string import str_compare
 
 class ParserError(Exception):
@@ -16,8 +16,9 @@ class ParserError(Exception):
         return f"{self.token.line}: {self.msg} ({self.token.lexeme})"
 
 class Parser:
-    def __init__(self, tokenizer: Tokenizer):
+    def __init__(self, tokenizer: Tokenizer, include_paths=None):
         self.lex = tokenizer
+        self.include_paths = include_paths or []
         self.tokenizers: List[Tokenizer] = []
         self.peeked: List[Token] = []
 
@@ -89,17 +90,23 @@ class Parser:
         # label or assignment or instruction
         elif tok := self.expect(TokenType.ID):
             if self.expect(TokenType.OP, ':'):
-                return Label(tok.lexeme, line=tok.line)
+                stmt = Label(tok.lexeme, line=tok.line)
+                stmt.filename = tok.filename
+                return stmt
             elif self.expect(TokenType.OP, '='):
                 value = self.parse_expr(required_type=int)
                 self.require(TokenType.EOL)
-                return Assignment(tok.lexeme, value, line=tok.line)
+                stmt = Assignment(tok.lexeme, value, line=tok.line)
+                stmt.filename = tok.filename
+                return stmt
             else:
                 return self.parse_instruction(tok)
         # Local numeric label
         elif tok := self.expect(TokenType.NUM):
              if self.expect(TokenType.OP, ':'):
-                 return Label(tok.lexeme, line=tok.line)
+                 stmt = Label(tok.lexeme, line=tok.line)
+                 stmt.filename = tok.filename
+                 return stmt
              else:
                  raise ParserError(f"Unexpected number at start of statement: {tok.lexeme}", tok)
         else:
@@ -122,8 +129,16 @@ class Parser:
                  base_dir = os.path.dirname(os.path.abspath(self.lex.filename))
              path = os.path.join(base_dir, filename)
              
+             # Search in include paths if not found
              if not os.path.exists(path):
-                 raise ParserError(f"Include file not found: {path}", tok)
+                 for inc_path in self.include_paths:
+                     test_path = os.path.join(inc_path, filename)
+                     if os.path.exists(test_path):
+                         path = test_path
+                         break
+
+             if not os.path.exists(path):
+                 raise ParserError(f"Include file not found: {filename} (searched in {base_dir} and {self.include_paths})", tok)
 
              abs_path = os.path.abspath(path)
              for t in self.tokenizers:
@@ -173,15 +188,71 @@ class Parser:
                  if stmt:
                      current_block.append(stmt)
                      
-             return IfDef(cond_sym, then_block, else_block, line=tok.line)
+             stmt = IfDef(cond_sym, then_block, else_block, line=tok.line)
+             stmt.filename = tok.filename
+             return stmt
 
         if name in ['.byte', '.word', '.fill']:
              args = self.parse_expr_list()
         elif name in ['.org', '.cpu', '.align']:
              args = [self.parse_expr()]
+        elif name == '.enum':
+             return self.parse_enum(tok)
         
         self.require(TokenType.EOL)
-        return Directive(name, args, line=tok.line)
+        stmt = Directive(name, args, line=tok.line)
+        stmt.filename = tok.filename
+        return stmt
+
+    def parse_enum(self, tok: Token) -> EnumDef:
+        # Optional name
+        name = None
+        if self.peektok().type == TokenType.ID:
+            name = self.nexttok().lexeme
+        
+        # Optional size
+        size = 1
+        if self.expect(TokenType.OP, ':'):
+            type_tok = self.require(TokenType.ID)
+            if str_compare(type_tok.lexeme, "word", True):
+                size = 2
+            elif str_compare(type_tok.lexeme, "byte", True):
+                size = 1
+            else:
+                raise ParserError("Enum type must be byte or word", type_tok)
+        
+        self.require(TokenType.EOL)
+        
+        members = []
+        while True:
+            # Check for .end
+            peek = self.peektok()
+            if peek.type == TokenType.DIR and str_compare(peek.lexeme, ".end", True):
+                self.nexttok() # consume .end
+                self.require(TokenType.EOL)
+                break
+            
+            if peek.type == TokenType.EOF:
+                raise ParserError("Unexpected EOF in enum block", peek)
+            
+            # Allow empty lines
+            if self.expect(TokenType.EOL):
+                continue
+            
+            # Parse member
+            member_tok = self.require(TokenType.ID)
+            member_name = member_tok.lexeme
+            
+            member_val = None
+            if self.expect(TokenType.OP, '='):
+                member_val = self.parse_expr()
+            
+            members.append((member_name, member_val))
+            self.require(TokenType.EOL)
+            
+        stmt = EnumDef(name, size, members, line=tok.line)
+        stmt.filename = tok.filename
+        return stmt
 
     def parse_instruction(self, tok: Token) -> Instruction:
         mnemonic = tok.lexeme.upper()
@@ -189,7 +260,9 @@ class Parser:
         self.require(TokenType.EOL)
         
         operand = operands[0] if operands else None
-        return Instruction(mnemonic, mode, operand, line=tok.line)
+        inst = Instruction(mnemonic, mode, operand, line=tok.line)
+        inst.filename = tok.filename
+        return inst
 
     def parse_operands(self, instruction: str) -> Tuple[str, List]:
         operands = []
@@ -324,10 +397,17 @@ class Parser:
         if tok := self.expect(TokenType.LOCAL_LABEL_REF):
             return Unresolved(tok.lexeme, 'LOCAL_REL')
         if tok := self.expect(TokenType.ID):
-            # AST always treats ID as Unresolved at parse time? 
-            # Or should strict value be resolved later?
-            # Yes, AST just captures name.
-            return Unresolved(tok.lexeme, 'ADDRESS')
+            # Check for dot access (Enum.Member) which comes as ID + DIR (.Member) by tokenizer behavior
+            name = tok.lexeme
+            peek = self.peektok()
+            if peek.type == TokenType.DIR:
+                 # The tokenizer treats .Member as a directive token, but here we want to treat it as .Member property access
+                 # So "Enum.Member" becomes ID("Enum") followed by DIR(".Member")
+                 part = self.nexttok()
+                 # part.lexeme includes the dot, e.g. ".Member"
+                 name += part.lexeme
+            
+            return Unresolved(name, 'ADDRESS')
         if tok := self.expect(TokenType.STR):
             return tok.value
             

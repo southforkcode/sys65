@@ -13,9 +13,8 @@ class Unresolved(Node):
     def __repr__(self):
         return f"Unresolved({self.name}, {self.type})"
 
-@dataclass
 class Statement(Node):
-    pass
+    filename: Optional[str] = None
 
 @dataclass
 class Program(Node):
@@ -57,3 +56,11 @@ class IfDef(Statement):
     then_block: List[Statement]
     else_block: List[Statement]
     line: int = 0
+
+@dataclass
+class EnumDef(Statement):
+    name: Optional[str]
+    size: int # 1 or 2
+    members: List[tuple] # (name, value_expr|None)
+    line: int = 0
+

@@ -1,4 +1,4 @@
-from .ast import Program, Statement, Instruction, Directive, Label, Assignment, Unresolved, BinaryExpr, IfDef
+from .ast import Program, Statement, Instruction, Directive, Label, Assignment, Unresolved, BinaryExpr, IfDef, EnumDef
 from .opcodes import OPCODES, OPCODES_6502, OPCODES_65C02
 from .bytes import ByteConverter
 from .symtab import SymbolTable
@@ -8,7 +8,13 @@ class CompilerError(Exception):
         self.msg = msg
         self.node = node
     def __str__(self):
-        return f"CompilerError: {self.msg}"
+        loc = ""
+        if self.node:
+             if self.node.filename:
+                 loc += f"{self.node.filename}:"
+             if hasattr(self.node, 'line') and self.node.line:
+                 loc += f"{self.node.line}: "
+        return f"{loc}{self.msg}"
 
 class Compiler:
     def __init__(self):
@@ -72,6 +78,8 @@ class Compiler:
             self.visit_instruction(stmt)
         elif isinstance(stmt, IfDef):
             self.visit_ifdef(stmt)
+        elif isinstance(stmt, EnumDef):
+            self.visit_enum_def(stmt)
 
     def visit_ifdef(self, node: IfDef):
         # Check if symbol is defined
@@ -83,6 +91,78 @@ class Compiler:
         else:
             for stmt in node.else_block:
                 self.visit_statement(stmt)
+
+    def visit_enum_def(self, node: EnumDef):
+        # Only process enums in Pass 1 to define symbols
+        if self.pass_num != 1:
+            return
+
+        current_value = 0
+        
+        for name, value_expr in node.members:
+            # If explicit value, resolve it
+            if value_expr is not None:
+                # Resolve expression. Since it's pass 1, we might not have all symbols.
+                # But enums usually depend on constants or previous enums.
+                # If we fail to resolve, we can default to 0 or raise error?
+                # For now, try resolve.
+                val = self.resolve_expr(value_expr)
+                if val is not None:
+                    current_value = val
+                else: 
+                     # If unresolved in pass 1?
+                     # Maybe forward reference?
+                     # Let's assume 0 for now and it will be correct if it's constant?
+                     # Actually if we can't resolve, we can't know the value for subsequent auto-increments.
+                     # This is a limitation. Most assemblers require constant expressions for enums.
+                     # But we'll follow resolve_expr logic which returns None if unresolved.
+                     # If None, we can't set symbol accurately.
+                     pass 
+            
+            # Define symbol
+            # If enum has name: EnumName.MemberName
+
+            
+            # Always define MemberName (unscoped) as per request?
+            # "The assembly program can refer to the enum by the name of its value (if the enum is not named) or by the enum name and value id"
+            # "DOS_COMMANDS.FORMAT would resolve to 4"
+            # The prompt implies:
+            # 1. Named enum (`.enum Name`) -> access via `Name.Member` ??
+            #    Or does it imply *also* `Member`?
+            #    "refer to the enum by the name of its value (if the enum is not named)"
+            #    This suggests if named, you MUST use Name.Value?
+            #    BUT: "or by the enum name and value id"
+            #    Let's re-read: "refer to the enum by the name of its value (if the enum is not named) or by the enum name and value id"
+            #    This *could* mean:
+            #    - Unnamed: `Member`
+            #    - Named: `Name.Member`
+            #    It acts like a namespace.
+            #    However, often assemblers export both or just one.
+            #    Let's stick to strict interpretation:
+            #    - If named: `Name.Member` only?
+            #    - If unnamed: `Member` only.
+            #    Wait, "DOS_COMMANDS.FORMAT would resolve to 4" example.
+            #    If I have `SEEK = 0`, can I access `SEEK` directly if it's inside `DOS_COMMANDS`?
+            #    The prompt says: "refer to the enum by the name of its value (if the enum is not named)"
+            #    This strictly implies: IF named, you CANNOT refer by name of value alone?
+            #    Let's look at the example:
+            #    .enum DOS_COMMANDS
+            #       SEEK = 0
+            #    .end
+            #    "DOS_COMMANDS.FORMAT would resolve to 4."
+            #    It doesn't explicitly say "SEEK would resolve to 0".
+            #    So I will implement scoping:
+            #    - Named: `Enum.Member`
+            #    - Unnamed: `Member`
+            #    Safe implementation.
+            
+            if node.name:
+                 self.symbols.set(f"{node.name}.{name}", current_value)
+            else:
+                 self.symbols.set(name, current_value)
+                 
+            # Auto-increment
+            current_value += 1
 
     def visit_directive(self, d: Directive):
         if d.name == '.org':

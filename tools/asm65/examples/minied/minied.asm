@@ -149,22 +149,6 @@ cmd_table_end:
     jsr CROUT
     jmp command_loop
 
-cmd_impl:
-    .word 0
-cmd_table:
-    .byte 'A'+$80, 'P'+$80, 'Q'+$80, 'H'+$80, 'E'+$80, 'D'+$80, 'I'+$80, 'F'+$80, 'B'+$80, '?'+$80, 'N'+$80
-.ifdef DEBUG
-    .byte '*'+$80
-.endif
-    .byte 0
-
-cmd_impl_table:
-    .word do_append, do_print, do_quit, do_home, do_edit, do_delete, do_insert, do_find, do_buffer_status, do_help, do_new
-.ifdef DEBUG
-    .word do_fill
-.endif
-    .word 0
-
 do_quit:
     rts
 
@@ -1726,8 +1710,17 @@ _plh_done:
     rts
 
 do_help:
-    lda #<msg_help
-    ldx #>msg_help
+    lda #<msg_help_0
+    ldx #>msg_help_0
+    jsr puts
+    lda #<msg_help_1
+    ldx #>msg_help_1
+    jsr puts
+    lda #<msg_help_2
+    ldx #>msg_help_2
+    jsr puts
+    lda #<msg_help_3
+    ldx #>msg_help_3
     jsr puts
     jmp command_loop
 
@@ -2245,34 +2238,395 @@ _mm_fwd_do:
 _mm_done:
     rts
 
-msg_help:
-    .byte "COMMANDS:", $0D
-    .byte " A       : APPEND LINES", $0D
-    .byte " P [N]   : PRINT LINES", $0D
-    .byte " D N     : DELETE LINE N", $0D
-    .byte " I N     : INSERT BEFORE LINE N", $0D
-    .byte " E N     : EDIT LINE N", $0D
-    .byte " F STR   : FIND STRING", $0D
-    .byte " B       : BUFFER STATUS", $0D
-    .byte " H       : CLEAR SCREEN", $0D
-    .byte " ?       : HELP", $0D
-    .byte " Q       : QUIT", $0D
-.ifdef DEBUG
-    .byte $0D, "DEBUG COMMANDS:", $0D
-    .byte " * N     : FILL N LINES", $0D
-.endif
-    .byte 0
+; ==============================================================================
+; SAVE ROUTINE
+; ==============================================================================
+do_save:
+    ; 1. Parse Filename
+    ; Skip command 'S'
+    iny
+    jsr skip_spaces
+    bne _ds_got_char
+    
+    ; No filename
+    lda #<msg_no_filename
+    ldx #>msg_no_filename
+    jsr puts
+    jmp command_loop
+    
+_ds_got_char:
+    ; Copy filename to FILENAME_BUFFER
+    ldx #0
+_ds_fname_loop:
+    lda (PTR_L), y
+    beq _ds_check_end_fname ; Null
+    cmp #','+$80 ; Check for separator (Drive/Slot)
+    beq _ds_check_opt
+    cmp #' '+$80 ; Check for space (end of filename?)
+    beq _ds_check_end_fname
+    
+    sta FILENAME_BUFFER, x
+    iny
+    inx
+    cpx #30
+    bcc _ds_fname_loop
+    ; Truncate if too long (or error)
+    
+_ds_check_end_fname:
+_ds_check_opt:
+    ; Terminate Filename (high bit set or not? DOS usually expects high bit set chars, 
+    ; but FM calls often take normal strings if length is managed? No, DOS 3.3 is high-bit ASCII.)
+    ; We already use high-bit ASCII in minied.
+    ; NOTE: DOS 3.3 FM might require the filename to be in a specific format or 
+    ; the Name Pointer to point to a string.
+    ; Standard DOS 3.3: High Definition ASCII.
+    
+    ; Ensure filename is clean (no trailing nulls inside buffer if we reuse it).
+    ; Fill rest with 0? No, just remember length or ensure terminator?
+    ; The FM parameter block takes a pointer. Does it expect a length byte or null?
+    ; It expects a pointer to the string. The string usually needs to be valid.
+    ; DOS 3.3 File Manager uses the length of the name found? 
+    ; Actually, it parses until it hits a non-valid char or max length?
+    ; Let's assume standard string conventions.
+    
+    lda #0
+    sta FILENAME_BUFFER, x ; Null terminate for our own sanity
+    
+    ; Save Y for parsing options
+    sty SHIFT_DIFF_L 
+    
+    ; Set Defaults for DOS
+    lda #6
+    sta FM_SLOT
+    lda #1
+    sta FM_DRIVE
+    lda #0
+    sta FM_VOL
+    
+    ; Parse Options
+    ldy SHIFT_DIFF_L
+    lda (PTR_L), y
+    cmp #','+$80
+    bne _ds_do_save_op ; No options
+    
+    ; Parse Options loop
+_ds_opt_loop:
+    iny
+    lda (PTR_L), y
+    cmp #'D'+$80
+    beq _ds_opt_drive
+    cmp #'S'+$80
+    beq _ds_opt_slot
+    cmp #'V'+$80
+    beq _ds_opt_vol
+    bne _ds_do_save_op ; Unknown or End
+    
+_ds_opt_drive:
+    iny
+    lda (PTR_L), y
+    and #$0F
+    sta FM_DRIVE
+    jmp _ds_next_opt
+_ds_opt_slot:
+    iny
+    lda (PTR_L), y
+    and #$0F
+    sta FM_SLOT
+    jmp _ds_next_opt
+_ds_opt_vol:
+    iny
+    jsr PARSE_DECIMAL ; Updates Y, returns in PD_VAL
+    lda PD_VAL
+    sta FM_VOL
+    jmp _ds_next_opt
+    
+_ds_next_opt:
+    ; Check for comma or end
+    lda (PTR_L), y
+    cmp #','+$80
+    beq _ds_opt_loop
+    
+_ds_do_save_op:
+    
+    ; Setup Parameter Block Common Fields
+    lda #<FILENAME_BUFFER
+    sta FM_NAME_PTR
+    lda #>FILENAME_BUFFER
+    sta FM_NAME_PTR+1
+    
+    lda #0 ; Text File
+    sta FM_FILETYPE
+    
+    ; --------------------------------------------------------------------------
+    ; 1. DELETE FILE (Best practice to ensure clean write)
+    ; --------------------------------------------------------------------------
+    lda #DOS_DELETE
+    sta FM_OPCODE
+    jsr call_dos
+    ; Ignore error (File might not exist)
+    
+    ; --------------------------------------------------------------------------
+    ; 2. OPEN FILE
+    ; --------------------------------------------------------------------------
+    lda #DOS_OPEN
+    sta FM_OPCODE
+    
+    ; Set Buffer for DOS (Buffer required for OPEN)
+    lda #<DOS_FILE_BUFFER
+    sta FM_BUFF_PTR
+    lda #>DOS_FILE_BUFFER
+    sta FM_BUFF_PTR+1
+    
+    jsr call_dos
+    bcc _ds_open_ok
+    jmp _ds_error
+    
+_ds_open_ok:
+    ; --------------------------------------------------------------------------
+    ; 3. WRITE FILE
+    ; --------------------------------------------------------------------------
+    lda #DOS_WRITE
+    sta FM_OPCODE
+    
+    ; Data Buffer to Write = BUFFER_START
+    lda #<BUFFER_START
+    sta FM_BUFF_PTR
+    lda #>BUFFER_START
+    sta FM_BUFF_PTR+1
+    
+    ; Length = TEXT_PTR - BUFFER_START
+    lda TEXT_PTR_L
+    sec
+    sbc #<BUFFER_START
+    sta FM_LEN
+    lda TEXT_PTR_H
+    sbc #>BUFFER_START
+    sta FM_LEN+1
+    
+    ; FILE TYPE = Text
+    lda #0
+    sta FM_FILETYPE
+    
+    jsr call_dos
+    bcc _ds_write_ok
+    jmp _ds_error_close
+    
+_ds_write_ok:
+    
+    ; --------------------------------------------------------------------------
+    ; 4. CLOSE FILE
+    ; --------------------------------------------------------------------------
+    lda #DOS_CLOSE
+    sta FM_OPCODE
+    ; FM_NAME_PTR still valid
+    jsr call_dos
+    
+    ; Success - Clear Dirty Flag
+    lda #0
+    sta DIRTY_FLAG
+    
+    lda #<msg_saved
+    ldx #>msg_saved
+    jsr puts
+    jmp command_loop
 
-; VARIABLES
-LINE_IDX: .word 0
-CURRENT_LINE: .word 0
-PRDEC_TMP: .byte 0
-PRDEC_FLAG: .byte 0
-PRDEC_SAVEX: .byte 0
-TARGET_LINE: .word 0
+_ds_error_close:
+    ; Try to close file even on error
+    pha ; Save Error Code
+    lda #DOS_CLOSE
+    sta FM_OPCODE
+    jsr call_dos
+    pla ; Restore Error Code
+    ; Fall through to error
+    
+_ds_error:
+    lda #<msg_dos_error
+    ldx #>msg_dos_error
+    jsr puts
+    jsr PRBYTE ; Print Accumulator (Error Code)
+    jsr CROUT
+    jmp command_loop
 
-msg_next: .byte "NEXT/CANCEL? ", 0
-msg_welcome: .byte "MINIED 1.1", $0d, 0
-msg_buffer_full: .byte "Error: Buffer Full", $0d, 0
-msg_too_many_lines: .byte "Error: Too Many Lines", $0d, 0
+call_dos:
+    lda #>FM_PARM_BLOCK
+    ldy #<FM_PARM_BLOCK
+    jsr DOS_FM
+    rts
 
+; ==============================================================================
+; TYPE ROUTINE
+; ==============================================================================
+do_type:
+    ; 1. Parse Filename (Copy-paste logic from do_save for now to avoid refactoring risk)
+    ; Skip command 'T'
+    iny
+    jsr skip_spaces
+    bne _dt_got_char
+    
+    ; No filename
+    lda #<msg_no_filename
+    ldx #>msg_no_filename
+    jsr puts
+    jmp command_loop
+    
+_dt_got_char:
+    ; Copy filename to FILENAME_BUFFER
+    ldx #0
+_dt_fname_loop:
+    lda (PTR_L), y
+    beq _dt_check_end_fname ; Null
+    cmp #','+$80 ; Check for separator (Drive/Slot)
+    beq _dt_check_opt
+    cmp #' '+$80 ; Check for space (end of filename?)
+    beq _dt_check_end_fname
+    
+    sta FILENAME_BUFFER, x
+    iny
+    inx
+    cpx #30
+    bcc _dt_fname_loop
+    
+_dt_check_end_fname:
+_dt_check_opt:
+    lda #0
+    sta FILENAME_BUFFER, x 
+    
+    ; Save Y 
+    sty SHIFT_DIFF_L 
+    
+    ; Set Defaults
+    lda #6
+    sta FM_SLOT
+    lda #1
+    sta FM_DRIVE
+    lda #0
+    sta FM_VOL
+    
+    ; Parse Options
+    ldy SHIFT_DIFF_L
+    lda (PTR_L), y
+    cmp #','+$80
+    bne _dt_do_type_op ; No options
+    
+    ; Parse Options loop
+_dt_opt_loop:
+    iny
+    lda (PTR_L), y
+    cmp #'D'+$80
+    beq _dt_opt_drive
+    cmp #'S'+$80
+    beq _dt_opt_slot
+    cmp #'V'+$80
+    beq _dt_opt_vol
+    bne _dt_do_type_op 
+    
+_dt_opt_drive:
+    iny
+    lda (PTR_L), y
+    and #$0F
+    sta FM_DRIVE
+    jmp _dt_next_opt
+_dt_opt_slot:
+    iny
+    lda (PTR_L), y
+    and #$0F
+    sta FM_SLOT
+    jmp _dt_next_opt
+_dt_opt_vol:
+    iny
+    jsr PARSE_DECIMAL 
+    lda PD_VAL
+    sta FM_VOL
+    jmp _dt_next_opt
+    
+_dt_next_opt:
+    lda (PTR_L), y
+    cmp #','+$80
+    beq _dt_opt_loop
+    
+_dt_do_type_op:
+    
+    ; Setup Parameter Block
+    lda #<FILENAME_BUFFER
+    sta FM_NAME_PTR
+    lda #>FILENAME_BUFFER
+    sta FM_NAME_PTR+1
+    
+    lda #0 ; Text File
+    sta FM_FILETYPE
+    
+    ; --------------------------------------------------------------------------
+    ; 1. OPEN FILE
+    ; --------------------------------------------------------------------------
+    lda #DOS_OPEN
+    sta FM_OPCODE
+    
+    lda #<DOS_FILE_BUFFER
+    sta FM_BUFF_PTR
+    lda #>DOS_FILE_BUFFER
+    sta FM_BUFF_PTR+1
+    
+    jsr call_dos
+    bcc _dt_open_ok
+    jmp _ds_error ; Reuse error handler
+    
+_dt_open_ok:
+    
+    ; --------------------------------------------------------------------------
+    ; 2. READ LOOP
+    ; --------------------------------------------------------------------------
+_dt_read_loop:
+    lda #DOS_READ
+    sta FM_OPCODE
+    
+    ; Read 1 byte to TEMP_PTR_L (reuse ZP)
+    ; Actually, let's read to a dedicated byte or just reuse a safe ZP?
+    ; We can read directly to memory? 
+    ; Let's use TEMP_PTR_L ($??) - Check usage.
+    ; TEMP_PTR_L is likely mapped to ZP.
+    ; Let's use PD_TEMP or similar safe scratch.
+    ; Or just a byte in BSS.
+    
+    lda #<TYPE_CHAR_BUF
+    sta FM_BUFF_PTR
+    lda #>TYPE_CHAR_BUF
+    sta FM_BUFF_PTR+1
+    
+    lda #1
+    sta FM_LEN
+    lda #0
+    sta FM_LEN+1
+    
+    jsr call_dos
+    bcs _dt_read_fail ; Error or EOF
+    
+    ; Print Char
+    lda TYPE_CHAR_BUF
+    ora #$80 ; Ensure Normal Video (if standard ASCII)
+    jsr COUT
+    
+    jmp _dt_read_loop
+    
+_dt_read_fail:
+    ; Check error code. 
+    ; If EOF (End of Data), usually specific code.
+    ; DOS 3.3 End of Data = 5.
+    cmp #5
+    beq _dt_eof
+    
+    ; Real error
+    jmp _ds_error_close
+    
+_dt_eof:
+    ; --------------------------------------------------------------------------
+    ; 3. CLOSE FILE
+    ; --------------------------------------------------------------------------
+    lda #DOS_CLOSE
+    sta FM_OPCODE
+    jsr call_dos
+    
+    jsr CROUT
+    jmp command_loop
+
+
+.inc "data.inc"

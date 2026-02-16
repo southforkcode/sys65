@@ -14,11 +14,12 @@ class TokenType(Enum):
   LOCAL_LABEL_REF = 8
 
 class Token:
-  def __init__(self, type: TokenType, lexeme: str, value: 'str|int|None', line: int):
+  def __init__(self, type: TokenType, lexeme: str, value: 'str|int|None', line: int, filename: str = None):
     self.type = type
     self.lexeme = lexeme
     self.value = value
     self.line = line
+    self.filename = filename
 
   def isa(self, type: TokenType, lexeme: str = None) -> bool:
     return self.type.name == type.name and (lexeme is None or self.lexeme == lexeme)
@@ -69,7 +70,7 @@ class Tokenizer:
         self._skip_whitespace()
         
         if self.pos >= self.len:
-            tok = Token(TokenType.EOF, "", None, self.line)
+            tok = Token(TokenType.EOF, "", None, self.line, self.filename)
             self.last_token = tok
             return tok
             
@@ -87,19 +88,19 @@ class Tokenizer:
                 self.pos += len(lexeme)
                 if type == TokenType.EOL:
                     self.line += 1
-                    tok = Token(type, lexeme, None, self.line - 1)
+                    tok = Token(type, lexeme, None, self.line - 1, self.filename)
                     self.last_token = tok
                     return tok
                 
                 value = self._parse_value(type, lexeme)
-                tok = Token(type, lexeme, value, self.line)
+                tok = Token(type, lexeme, value, self.line, self.filename)
                 self.last_token = tok
                 return tok
                 
         # Unknown character
         char = self.text[self.pos]
         self.pos += 1
-        tok = Token(TokenType.UNKNOWN, char, None, self.line)
+        tok = Token(TokenType.UNKNOWN, char, None, self.line, self.filename)
         self.last_token = tok
         return tok
 
