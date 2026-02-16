@@ -1,0 +1,23 @@
+Starting MiniEd Append Regression Test...
+Compiling Minied...
+Initiating Upload Sequence...
+Step A: Resetting Machine...
+Step B: Entering Monitor...
+Step C: Uploading Hex...
+Upload complete. Program started.
+Test 1: Clearing Buffer
+Test 2: Checking Buffer Status (Empty)
+FAIL: Buffer not empty or status unexpected
+Output: ERROR_GETTING_TEXT
+Test 3: Appending Line 1
+Test 4: Verifying Line 1
+FAIL: Line 1 not found
+Output: ERROR_GETTING_TEXT
+Test 5: Appending Line 2
+Test 6: Verifying Two Lines
+FAIL: Both lines not found
+Output: ERROR_GETTING_TEXT
+FAILURES Found:
+- Buffer Status Empty Failed
+- Line 1 Verification Failed
+- Line 2 Verification Failed

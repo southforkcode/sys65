@@ -15,6 +15,9 @@ python3 tools/asm65/asm65.py [-f {bin,hex}] <input_file> [<input_file>...] <outp
 - `-f, --format`: Output format.
     - `bin` (default): Raw binary file.
     - `hex`: Text file with hex dump (`ADDRESS: B1 B2 ...`).
+- `-D <name>[=value]`: Define a symbol to be used in the assembly process.
+    - If no value is provided, the symbol is defined with a value of `1`.
+    - Multiple definitions can be provided by repeating the flag (e.g., `-D DEBUG -D VERSION=2`).
 
 ### Example
 
@@ -142,4 +145,23 @@ Includes another source file at the current position. The path is relative to th
 ```asm
 .include "macros.asm"
 .inc "data.inc"
+```
+
+### Conditional Compilation (.ifdef, .else, .endif)
+These directives allow you to conditionally include or exclude blocks of code based on whether a symbol is defined.
+
+- `.ifdef <symbol>`: Checks if `<symbol>` is defined. if it is, the code block following it is assembled.
+- `.else`: Optional. Specifies a block of code to assemble if the `.ifdef` condition was false.
+- `.endif`: Marks the end of the conditional block.
+
+Example:
+
+```asm
+.ifdef DEBUG
+    lda #$01
+    sta $D020 ; Change border color to white in debug mode
+.else
+    lda #$00
+    sta $D020 ; Change border color to black in release mode
+.endif
 ```

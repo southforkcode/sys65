@@ -152,9 +152,18 @@ cmd_table_end:
 cmd_impl:
     .word 0
 cmd_table:
-    .byte 'A'+$80, 'P'+$80, 'Q'+$80, 'H'+$80, 'E'+$80, 'D'+$80, 'I'+$80, 'F'+$80, 'B'+$80, '?'+$80, '*'+$80, 'N'+$80, 0
+    .byte 'A'+$80, 'P'+$80, 'Q'+$80, 'H'+$80, 'E'+$80, 'D'+$80, 'I'+$80, 'F'+$80, 'B'+$80, '?'+$80, 'N'+$80
+.ifdef DEBUG
+    .byte '*'+$80
+.endif
+    .byte 0
+
 cmd_impl_table:
-    .word do_append, do_print, do_quit, do_home, do_edit, do_delete, do_insert, do_find, do_buffer_status, do_help, do_fill, do_new, 0
+    .word do_append, do_print, do_quit, do_home, do_edit, do_delete, do_insert, do_find, do_buffer_status, do_help, do_new
+.ifdef DEBUG
+    .word do_fill
+.endif
+    .word 0
 
 do_quit:
     rts
@@ -235,6 +244,7 @@ _dp_start:
     
     lda #1
     sta CURRENT_LINE
+    lda #0
     sta CURRENT_LINE+1 ; Initialize High byte
     
     ; ldx LINE_IDX -> 16-bit check
@@ -382,7 +392,9 @@ found_null:
     sta TEXT_PTR_H
     
     inc LINE_IDX
-    lda #1
+    bne 1f
+    inc LINE_IDX+1
+1:  lda #1
     sta DIRTY_FLAG
     jmp append_loop
 
@@ -845,7 +857,9 @@ _di_done_copy:
     sta EDIT_PTR_H
     
     inc LINE_IDX
-    lda #1
+    bne 1f
+    inc LINE_IDX+1
+1:  lda #1
     sta DIRTY_FLAG
     jmp _di_input_loop
 
@@ -1711,26 +1725,6 @@ _plh_done:
     jsr CROUT
     rts
 
-msg_next:
-    .byte "NEXT/CANCEL? ", 0
-
-msg_welcome:
-    .byte "MINIED 1.1", $0d, 0
-
-msg_buffer_full:
-    .byte "Error: Buffer Full", $0d, 0
-msg_too_many_lines:
-    .byte "Error: Too Many Lines", $0d, 0
-    
-LINE_IDX:
-    .byte 0
-
-CURRENT_LINE: .byte 0
-PRDEC_TMP: .byte 0
-PRDEC_FLAG: .byte 0
-PRDEC_SAVEX: .byte 0
-TARGET_LINE: .byte 0
-    
 do_help:
     lda #<msg_help
     ldx #>msg_help
@@ -1794,6 +1788,19 @@ _dbs_print_dirty:
     jsr CROUT
     
     jmp command_loop
+
+msg_next:
+    .byte "NEXT/CANCEL? ", 0
+
+msg_welcome:
+    .byte "MINIED 1.1", $0d, 0
+
+msg_buffer_full:
+    .byte "Error: Buffer Full", $0d, 0
+msg_too_many_lines:
+    .byte "Error: Too Many Lines", $0d, 0
+    
+
 
 ; Print 16-bit number in X (High), A (Low)
 PRDEC16:
@@ -1938,16 +1945,20 @@ PRDEC16_VAL_H: .byte 0
 
 msg_dirty: .byte "UNSAVED ", 0
 msg_clean: .byte "NEW ", 0
-msg_lorem: .byte "LOREM IPSUM LINE", 0
-msg_fill_done: .byte "FILL DONE", 0
 msg_confirm_new: .byte "CLEAR BUFFER (Y/N)?", 0
 msg_cleared: .byte "BUFFER CLEARED", 0
 msg_slash: .byte "/", 0
 msg_lines_suffix: .byte "L ", 0
 msg_bytes_suffix: .byte "B", 0
 
+.ifdef DEBUG
+msg_lorem: .byte "LOREM IPSUM LINE", 0
+msg_fill_done: .byte "FILL DONE", 0
+.endif
+
 ; Find Address of Line A (1-based)
 ; Inputs: A = Line Number
+.ifdef DEBUG
 do_fill:
     ; Fill buffer with N lines of dummy text.
     ; Syntax: * N
@@ -2067,6 +2078,8 @@ _dfill_err_buf:
     jsr puts
     jsr CROUT
     jmp command_loop
+
+.endif
 
 ; Outputs: PTR = Address of start of line
 ; Destroys: A, X, Y
@@ -2243,4 +2256,23 @@ msg_help:
     .byte " B       : BUFFER STATUS", $0D
     .byte " H       : CLEAR SCREEN", $0D
     .byte " ?       : HELP", $0D
-    .byte " Q       : QUIT", $0D, 0
+    .byte " Q       : QUIT", $0D
+.ifdef DEBUG
+    .byte $0D, "DEBUG COMMANDS:", $0D
+    .byte " * N     : FILL N LINES", $0D
+.endif
+    .byte 0
+
+; VARIABLES
+LINE_IDX: .word 0
+CURRENT_LINE: .word 0
+PRDEC_TMP: .byte 0
+PRDEC_FLAG: .byte 0
+PRDEC_SAVEX: .byte 0
+TARGET_LINE: .word 0
+
+msg_next: .byte "NEXT/CANCEL? ", 0
+msg_welcome: .byte "MINIED 1.1", $0d, 0
+msg_buffer_full: .byte "Error: Buffer Full", $0d, 0
+msg_too_many_lines: .byte "Error: Too Many Lines", $0d, 0
+

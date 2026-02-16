@@ -66,7 +66,7 @@ def run_test():
     # 1. Compile MiniEd Test Build (Reduced Limits via -D flags)
     print("Compiling Test Build (Limits: 10 lines, 256 bytes)...")
     subprocess.run([".venv/bin/python", "tools/asm65/asm65.py", "-f", "hex", 
-                    "-DMAX_LINES_ARG=10", "-DMEM_LIMIT_ARG=0x4100",
+                    "-DMAX_LINES_ARG=10", "-DMEM_LIMIT_ARG=0x4100", "-DDEBUG",
                     "tools/asm65/examples/minied/minied.asm", "minied.hex"], check=True)
     
     # Validates hex file existence
